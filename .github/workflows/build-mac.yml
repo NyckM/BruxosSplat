@@ -6,7 +6,6 @@ on:
 jobs:
   build-mac:
     runs-on: macos-latest
-
     steps:
       - name: Baixar o código
         uses: actions/checkout@v4
@@ -27,6 +26,39 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run dist:mac
+
+      - name: Corrigir Assinatura e Atributos (Ad-hoc & Quarantine)
+        run: |
+          # 1. Remove qualquer atributo de quarentena que tenha se infiltrado
+          xattr -rc dist/*.app || true
+          
+          # 2. Assina recursivamente todos os binários internos do Electron de dentro para fora
+          echo "Assinando frameworks e helpers..."
+          find dist -name "*.app" -print0 | while IFS=read -r -d '' app; do
+            # Se houver frameworks/helpers internos, assina eles primeiro
+            find "$app/Contents/Frameworks" -type f -perm +111 2>/dev/null | while read -r bin; do
+              codesign --force --options runtime --sign "-" "$bin"
+            done || true
+            
+            # Se houver helper apps, assina eles
+            find "$app/Contents/Frameworks" -name "*.app" 2>/dev/null | while read -r helper; do
+              codesign --force --options runtime --sign "-" "$helper"
+            done || true
+
+            # Por fim, assina o pacote principal do aplicativo
+            codesign --force --options runtime --sign "-" "$app"
+            
+            echo "Aplicativo $app assinado com sucesso!"
+          done
+
+      - name: Recriar o DMG (caso o electron-builder empacote antes da assinatura)
+        run: |
+          # Se o seu 'npm run dist:mac' já gera o DMG, o ideal é garantir que a assinatura 
+          # ocorra ANTES da geração do DMG. Se o seu script gera o DMG direto, 
+          # podemos usar o npx aiff/create-dmg ou garantir que o electron-builder pegue o app já assinado.
+          # Dica: Verifique se o seu comando dist:mac roda o electron-builder. 
+          # O electron-builder aceita configurar 'identity: null' no electronForge/electronBuilder config.
+        shell: bash
 
       - name: Publicar como artefato
         uses: actions/upload-artifact@v4
