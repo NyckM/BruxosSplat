@@ -55,9 +55,10 @@
       "icon": "build/icon.icns",
       "category": "public.app-category.graphics-design",
       "artifactName": "BruxoSplat-${version}-${arch}.${ext}",
-      "hardenedRuntime": true,
+      "hardenedRuntime": false,
       "gatekeeperAssess": false,
-      "identity": null
+      "identity": null,
+      "sign": false
     },
     "dmg": {
       "artifactName": "BruxoSplat-${version}-${arch}.${ext}"
