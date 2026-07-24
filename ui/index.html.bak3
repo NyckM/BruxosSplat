@@ -1,0 +1,1025 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>BruxoSplat</title>
+<style>
+  :root {
+    --bg:#1b1b1f; --bg2:#232327; --bg3:#2b2b30; --line:#3a3a40;
+    --tx:#d8d8dc; --mut:#8b8b93; --acc:#8b5cf6; --acc2:#a78bfa; --grn:#22c55e; --grn2:#86efac; --ok:#22c55e;
+  }
+  * { box-sizing:border-box; margin:0; font-family:'Segoe UI',sans-serif; font-size:13px; }
+  body { background:var(--bg); color:var(--tx); height:100vh; display:flex; flex-direction:column; overflow:hidden; }
+
+  #topbar { display:flex; align-items:center; gap:2px; background:var(--bg2); border-bottom:1px solid var(--line); padding:3px 8px; }
+  .tbtn { display:flex; align-items:center; gap:7px; background:none; border:none; color:var(--tx); padding:7px 13px; border-radius:6px; cursor:pointer; }
+  .tbtn:hover { background:var(--bg3); }
+  .tbtn:disabled { opacity:.35; cursor:default; }
+  .tbtn .ic { font-size:16px; }
+  #brand { margin-left:auto; display:flex; align-items:center; gap:8px; padding-right:8px; }
+  #brand b { font-size:15px; } #brand b span { color:var(--acc2); }
+
+  #main { flex:1; display:flex; overflow:hidden; }
+
+  /* left tool strip (Postshot style) */
+  #ltools { width:44px; background:var(--bg2); border-right:1px solid var(--line); display:flex; flex-direction:column; align-items:center; padding-top:6px; gap:2px; }
+  .ltool { width:34px; height:34px; display:flex; align-items:center; justify-content:center; border-radius:6px; cursor:pointer; color:var(--mut); font-size:16px; border:none; background:none; }
+  .ltool:hover { background:var(--bg3); color:var(--tx); }
+  .ltool.sel { background:var(--bg3); color:var(--grn2); box-shadow:inset 0 0 0 1px var(--grn); }
+
+  #viewportWrap { flex:1; position:relative; background:#101013; }
+  #glcanvas { width:100%; height:100%; display:block; }
+  #viewer { width:100%; height:100%; border:none; display:none; position:absolute; inset:0; }
+  #placeholder { position:absolute; inset:0; display:flex; flex-direction:column; gap:12px; align-items:center; justify-content:center; color:var(--mut); pointer-events:none; }
+  #placeholder .big { font-size:44px; }
+  #vpBadge { position:absolute; top:10px; left:10px; background:rgba(20,20,24,.8); border:1px solid var(--line); border-radius:6px; padding:4px 10px; font-size:11px; color:var(--acc2); display:none; }
+  #statusOverlay { position:absolute; left:0; right:0; bottom:0; background:rgba(20,20,24,.92); border-top:1px solid var(--line); padding:8px 14px; display:none; }
+  #statusOverlay .row { display:flex; justify-content:space-between; }
+  #stageLabel { color:var(--grn2); font-weight:600; }
+  #stageLine { color:var(--mut); font-size:12px; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #obar { height:4px; background:var(--bg3); border-radius:2px; margin-top:6px; overflow:hidden; }
+  #obarIn { height:100%; width:0; background:linear-gradient(90deg,var(--acc),var(--grn)); transition:width .4s; }
+
+  #right { width:330px; background:var(--bg2); border-left:1px solid var(--line); display:flex; flex-direction:column; }
+  #tabs { display:flex; border-bottom:1px solid var(--line); }
+  .tab { padding:8px 16px; cursor:pointer; color:var(--mut); border-bottom:2px solid transparent; }
+  .tab.active { color:var(--grn2); border-bottom-color:var(--grn); }
+  .tabpage { flex:1; overflow-y:auto; padding:10px; display:none; }
+  .tabpage.active { display:block; }
+
+  .tree div { padding:4px 6px; border-radius:4px; }
+  .tree div:hover { background:var(--bg3); }
+  .tree .lvl1 { margin-left:16px; color:var(--mut); }
+  .tree .on { color:var(--tx); }
+
+  .group { border:1px solid var(--line); border-radius:6px; margin-bottom:10px; }
+  .group h4 { background:var(--bg3); padding:6px 10px; font-size:12px; border-radius:6px 6px 0 0; color:var(--acc2); border-left:3px solid var(--grn); }
+  .group .body { padding:8px 10px; }
+  label { display:block; color:var(--mut); font-size:11px; margin:8px 0 3px; }
+  select,input { width:100%; background:var(--bg); color:var(--tx); border:1px solid var(--line); border-radius:5px; padding:6px 8px; }
+  .path { font-size:11px; color:var(--mut); word-break:break-all; margin-top:4px; }
+  .btn { width:100%; background:var(--bg3); border:1px solid var(--line); color:var(--tx); border-radius:6px; padding:8px; cursor:pointer; margin-top:6px; }
+  .btn:hover { border-color:var(--acc); }
+  .btn.go { background:var(--grn); color:#06130a; border:none; font-weight:600; font-size:14px; padding:11px; }
+  .btn.go:disabled { opacity:.4; }
+  .chk { display:flex; align-items:center; gap:8px; margin:6px 0; color:var(--tx); }
+  .chk input { width:auto; }
+
+  #log { font-family:Consolas,monospace; font-size:11px; color:#9a9aa5; white-space:pre-wrap; word-break:break-all; }
+
+  .stage { display:flex; gap:8px; align-items:center; margin:5px 0; color:var(--mut); font-size:12px; }
+  .stage.active { color:var(--acc2); } .stage.done { color:var(--ok); }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--bg3); flex:none; }
+  .active .dot { background:var(--acc); animation:pulse 1s infinite; } .done .dot { background:var(--ok); }
+  @keyframes pulse { 50% { opacity:.35 } }
+
+  #statusbar { background:var(--bg2); border-top:1px solid var(--line); padding:4px 12px; color:var(--mut); font-size:11px; display:flex; gap:16px; }
+  [data-tip] { position:relative; }
+  [data-tip]:hover::after {
+    content:attr(data-tip);
+    position:absolute; left:110%; top:50%; transform:translateY(-50%);
+    background:#101013; color:var(--tx); border:1px solid var(--acc);
+    border-left:3px solid var(--grn); padding:7px 10px; border-radius:8px;
+    font-size:11px; white-space:pre-line; width:190px; z-index:99;
+    box-shadow:0 4px 16px rgba(0,0,0,.5); pointer-events:none;
+  }
+  #topbar [data-tip]:hover::after { left:0; top:110%; transform:none; }
+.mbtn { background:none; border:none; color:var(--mut); padding:6px 12px; cursor:pointer; font-size:12px; }
+  .mbtn.sel { background:var(--bg3); color:var(--grn2); }
+  .mbtn:disabled { opacity:.35; cursor:default; }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <button class="tbtn" id="btnVideo" data-tip="Importar vídeos
+Escolha um ou mais vídeos gravados orbitando a cena."><span class="ic">🎥</span>Importar</button>
+  <button class="tbtn" id="btnAlign" data-tip="Alinhar Câmeras
+Calcula a posição de cada frame (COLMAP) e mostra a nuvem de pontos + trajeto no viewport. Revise antes de treinar." disabled><span class="ic">📐</span>Alinhar Câmeras</button>
+  <button class="tbtn" id="btnStart" data-tip="Iniciar Treino
+Treina o Gaussian Splatting na sua GPU (Brush). Usa o alinhamento já feito." disabled><span class="ic">⚙️</span>Iniciar Treino</button>
+  <button class="tbtn" id="btnFolder" data-tip="Abrir a pasta onde o .ply foi salvo." disabled><span class="ic">📂</span>Abrir .ply</button>
+  <button class="tbtn" id="btnWebTop" data-tip="Bruxos WebEDIT
+Abre o seu viewer/editor (efeitos GPU, crop, animação de câmera, gravação) com o splat atual." disabled><span class="ic">🔮</span>WebEDIT</button>
+  <button class="tbtn" id="btnSuper" data-tip="SuperSplat
+Abre o editor SuperSplat completo com seu splat carregado (gizmo, seleções, undo/redo)." disabled><span class="ic">🟠</span>SuperSplat</button>
+  <button class="tbtn" id="btnOut" data-tip="Pasta de saída
+Onde os .ply serão salvos (padrão: Documentos\BruxoSplat)."><span class="ic">📁</span>Saída</button>
+  <div id="brand"><img src="https://nyckm.github.io/3dGS_WebEDIT/Bruxos.png" style="height:26px;border-radius:6px" onerror="this.style.display='none'"> <b>Bruxo<span>Splat</span></b></div>
+</div>
+
+<div id="main">
+  <div id="ltools">
+    <button class="ltool sel" title="Orbitar">🧭</button>
+    <button class="ltool" id="tglPoints" data-tip="Mostrar/ocultar a nuvem de pontos do alinhamento.">⁘</button>
+    <button class="ltool" id="tglCams" data-tip="Mostrar/ocultar o trajeto e as poses das câmeras.">🎦</button>
+    <button class="ltool" id="btnResetCam" data-tip="Recentrar a vista no conteúdo.">⌂</button>
+    <div style="height:1px;width:26px;background:var(--line);margin:6px 0"></div>
+    <button class="ltool" id="tMove" data-tip="Mover (gizmo)
+Arraste as setas roxa/verde para deslocar o splat nos eixos.">✥</button>
+    <button class="ltool" id="tRotY" data-tip="Girar (gizmo)
+Arraste o anel verde para girar o splat no eixo Y.">↻</button>
+    <button class="ltool" id="tScale" data-tip="Escalar (gizmo)
+Arraste o cubo central para cima/baixo para aumentar/diminuir o splat.">⤢</button>
+    <button class="ltool" id="tSel" data-tip="Seleção retangular
+Arraste na tela para selecionar gaussians. Shift soma à seleção.">▧</button>
+    <button class="ltool" id="tDel" data-tip="Excluir seleção
+Remove os gaussians selecionados (tecla Delete também).">🗑</button>
+    <button class="ltool" id="tCrop" data-tip="Crop
+Mantém apenas a seleção e descarta o resto.">✂</button>
+    <button class="ltool" id="tCenter" data-tip="Centralizar
+Coloca o centro do splat no meio da tela/origem.">⊕</button>
+    <button class="ltool" id="tClean" data-tip="Limpeza
+Remove floaters de baixa opacidade (ajuste o limite em Parâmetros → Editor).">🧹</button>
+    <button class="ltool" id="tSave" data-tip="Salvar .ply
+Grava um novo arquivo com transformações, exclusões e limpeza aplicadas.">💾</button>
+    <button class="ltool" id="tWeb" data-tip="Abrir no editor WebEDIT (efeitos, câmera, gravação).">🌐</button>
+  </div>
+
+  <div id="vpCol" style="flex:1;display:flex;flex-direction:column;min-width:0">
+  <div id="vpbar" style="display:flex;align-items:center;gap:8px;background:var(--bg2);border-bottom:1px solid var(--line);padding:4px 10px">
+    <span id="slotBack"></span><span id="slotView"></span><span id="slotPlay" style="display:flex;gap:4px"></span>
+    <span style="flex:1"></span><span id="slotMode"></span>
+  </div>
+  <div id="viewportWrap">
+    <canvas id="glcanvas"></canvas>
+    <iframe id="viewer"></iframe>
+    <div id="placeholder">
+      <div class="big">🪄</div>
+      <div>Importe um vídeo e clique em <b>Iniciar Treino</b></div>
+      <div style="font-size:11px">A nuvem de pontos e o trajeto da câmera aparecem aqui antes dos gaussians</div>
+    </div>
+    <div id="vpBadge">Nuvem esparsa (COLMAP)</div>
+    <div id="modeSel" style="display:flex;background:#101013;border:1px solid var(--line);border-radius:8px;overflow:hidden">
+      <button class="mbtn sel" id="mPoints" data-tip="Modo Pontos
+Nuvem leve para editar (selecionar, excluir, gizmo).">⁘ Pontos</button>
+      <button class="mbtn" id="mGS" data-tip="Modo Gaussians
+Render splat real (mesma engine do WebEDIT). Aplica suas edições antes de renderizar.">✴ GS</button>
+      <button class="mbtn" id="mMesh" disabled data-tip="Modo Mesh
+Em breve.">▲ Mesh</button>
+    </div>
+    <select id="viewSel" style="width:auto;max-width:220px;background:#101013;color:var(--tx);border:1px solid var(--line);border-radius:6px;padding:4px 8px">
+      <option value="free">🎥 Câmera livre</option>
+      <option value="front">Frente (F4)</option>
+      <option value="top">Topo (F2)</option>
+      <option value="right">Direita (F3)</option>
+      <option value="left">Esquerda</option>
+      <option value="back">Trás</option>
+      <option value="bottom">Baixo</option>
+    </select>
+    <button id="btnBackEd" style="display:none;background:var(--grn);color:#06130a;border:none;border-radius:8px;padding:7px 12px;cursor:pointer;font-weight:600;opacity:.9">← Voltar ao editor</button>
+    <div id="playbar" style="display:flex;gap:4px">
+      <button class="ltool" id="pbPlay" data-tip="Órbita automática (turntable)\nGira a câmera ao redor da cena.">▶</button>
+      <button class="ltool" id="pbStop" data-tip="Parar a órbita.">■</button>
+      <button class="ltool" id="pbSlow" data-tip="Mais devagar.">−</button>
+      <button class="ltool" id="pbFast" data-tip="Mais rápido.">＋</button>
+    </div>
+    <div id="statusOverlay">
+      <div class="row"><span id="stageLabel">—</span><span id="stagePct"></span></div>
+      <div id="stageLine"></div>
+      <div id="obar"><div id="obarIn"></div></div>
+    </div>
+  </div>
+
+  </div>
+  <div id="right">
+    <div id="tabs">
+      <div class="tab active" data-t="scene">Cena</div>
+      <div class="tab" data-t="params">Parâmetros</div>
+      <div class="tab" data-t="ia">Modos IA</div>
+      <div class="tab" data-t="log">Log</div>
+    </div>
+
+    <div class="tabpage active" id="pg-scene">
+      <div class="tree">
+        <div>📁 Cena</div>
+        <div class="lvl1" id="tVideo">🎞 Vídeos — <i>nenhum</i></div>
+        <div class="lvl1" id="tPoints">⁘ Nuvem esparsa — <i>—</i></div>
+        <div class="lvl1" id="tCams">🎦 Câmeras — <i>—</i></div>
+        <div class="lvl1" id="tSplat">✨ Splat — <i>não gerado</i></div>
+      </div>
+      <div style="margin-top:14px" class="group"><h4>Progresso</h4><div class="body">
+        <div class="stage" id="st-setup"><div class="dot"></div>Ferramentas (ffmpeg · COLMAP · Brush)</div>
+        <div class="stage" id="st-frames"><div class="dot"></div>Extração de frames</div>
+        <div class="stage" id="st-colmap"><div class="dot"></div>Reconstrução de câmeras</div>
+        <div class="stage" id="st-train"><div class="dot"></div>Treino 3DGS (GPU)</div>
+      </div></div>
+    </div>
+
+    <div class="tabpage" id="pg-params">
+      <div class="group"><h4>Vídeos</h4><div class="body">
+        <div id="videoList" style="font-size:11px"></div>
+        <button class="btn" id="btnAddVideo">＋ Adicionar vídeo</button>
+        <div class="path">Início/Fim: hh:mm:ss (vazio = vídeo todo) · Intervalo: segundos entre fotos</div>
+      </div></div>
+      <div class="group"><h4>Treino</h4><div class="body">
+        <label>Qualidade (passos)</label>
+        <select id="steps">
+          <option value="7000">Rascunho — 7k (rápido)</option>
+          <option value="15000">Média — 15k</option>
+          <option value="30000" selected>Alta — 30k</option>
+          <option value="50000">Máxima — 50k (lento)</option>
+        </select>
+      </div></div>
+      <div class="group"><h4>Extração de frames</h4><div class="body">
+        <label>Resolução máxima (lado maior, px)</label>
+        <select id="maxSize"><option>1280</option><option selected>1600</option><option>1920</option></select>
+      </div></div>
+      <div class="group"><h4>Editor</h4><div class="body">
+        <label>Escala do splat</label>
+        <input type="range" id="edScale" min="-1" max="1" step="0.01" value="0">
+        <div class="chk"><input type="checkbox" id="edCompact"><span>Salvar compacto (remove harmônicos — ~4× menor)</span></div>
+        <label>Limpeza: opacidade mínima (%)</label>
+        <input type="range" id="edOpac" min="0" max="60" step="1" value="15">
+        <div class="path">Ferramentas na barra esquerda: mover, girar, selecionar (arraste na tela), excluir, crop, centralizar, limpar, salvar.</div>
+      </div></div>
+      <div class="group"><h4>Viewport</h4><div class="body">
+        <div class="chk"><input type="checkbox" id="cbPoints" checked><span>Nuvem de pontos</span></div>
+        <div class="chk"><input type="checkbox" id="cbCams" checked><span>Trajeto da câmera</span></div>
+      </div></div>
+      <div class="group"><h4>Saída</h4><div class="body">
+        <button class="btn" id="btnOut2">Escolher pasta…</button>
+        <div class="path" id="outPath">Padrão: Documentos\BruxoSplat</div>
+      </div></div>
+      <button class="btn go" id="btnStart2" disabled>⚙️ Iniciar Treino</button>
+    </div>
+
+    <div class="tabpage" id="pg-ia">
+      <div class="group"><h4>Foto → 3D (SHARP)</h4><div class="body">
+        <div class="path">Uma única foto vira um splat 3D em segundos (Apple SHARP). Instala ~2 GB na primeira vez.</div>
+        <button class="btn" id="iaInstallSharp">⬇ Instalar SHARP</button>
+        <button class="btn go" id="iaRunSharp">📷 Escolher foto e gerar</button>
+      </div></div>
+      <div class="group"><h4>Vídeo → 4D (SHARP em sequência)</h4><div class="body">
+        <div class="path">Extrai frames do vídeo e roda o SHARP em cada um — gera uma sequência de .ply (um splat por frame) para montar o .splat4d.</div>
+        <label>Intervalo entre frames (segundos)</label>
+        <input id="s4dInterval" value="0.5">
+        <button class="btn go" id="iaRunSharp4d">🎬 Escolher vídeo e gerar sequência</button>
+      </div></div>
+      <div class="group"><h4>Imagem → Asset 3D (TripoSplat)</h4><div class="body">
+        <div class="path">Uma imagem vira um asset 3D completo em 360° (TripoSR). Instala ~4 GB na primeira vez. Requer GPU NVIDIA.</div>
+        <button class="btn" id="iaInstallTripo">⬇ Instalar TripoSplat</button>
+        <button class="btn go" id="iaRunTripo">🖼 Escolher imagem e gerar</button>
+      </div></div>
+      <div class="path">Os modelos são instalados aos poucos, num ambiente Python compartilhado (uv). Vídeo→SHARP e FaceAnything chegam em seguida.</div>
+    </div>
+    <div class="tabpage" id="pg-log"><div id="log"></div></div>
+  </div>
+</div>
+
+<div id="statusbar">
+  <span id="sbState">Pronto</span><span id="sbVideo"></span><span id="sbPly"></span>
+  <span style="margin-left:auto">LMB orbita · roda aproxima · RMB desloca</span>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "@mkkellogg/gaussian-splats-3d": "https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4.7/build/gaussian-splats-3d.module.js?v=2"
+} }
+</script>
+<script type="module">
+  import * as THREE from 'three';
+
+  // ── Viewport 3D (preview de pontos + câmeras) ──
+  const canvas = document.getElementById('glcanvas');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x101013);
+  const camera = new THREE.PerspectiveCamera(55, 1, 0.01, 1000);
+  camera.position.set(2, 1.2, 2);
+  let target = new THREE.Vector3(0, 0, 0);
+
+  // Órbita simples (sem OrbitControls externo)
+  let dragging = 0, px = 0, py = 0, theta = 0.8, phi = 1.1, radius = 3;
+  const updateCam = () => {
+    camera.position.set(
+      target.x + radius * Math.sin(phi) * Math.cos(theta),
+      target.y + radius * Math.cos(phi),
+      target.z + radius * Math.sin(phi) * Math.sin(theta));
+    camera.lookAt(target);
+  };
+  canvas.addEventListener('mousedown', e => { dragging = e.button === 2 ? 2 : 1; px = e.clientX; py = e.clientY; });
+  window.addEventListener('mouseup', () => dragging = 0);
+  window.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const dx = (e.clientX - px) / 200, dy = (e.clientY - py) / 200;
+    if (dragging === 1) { theta += dx; phi = Math.max(0.05, Math.min(Math.PI - 0.05, phi + dy)); }
+    else {
+      const right = new THREE.Vector3().subVectors(camera.position, target).cross(camera.up).normalize();
+      target.addScaledVector(right, dx * radius * 0.3);
+      target.y += dy * radius * 0.3;
+    }
+    px = e.clientX; py = e.clientY; updateCam();
+  });
+  canvas.addEventListener('wheel', e => { radius = Math.max(0.1, radius * (e.deltaY > 0 ? 1.1 : 0.9)); updateCam(); });
+  canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+  const grid = new THREE.GridHelper(10, 20, 0x3a3a40, 0x26262b);
+  scene.add(grid);
+  let ptsObj = null, camsObj = null;
+
+  function resize() {
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h; camera.updateProjectionMatrix();
+  }
+  new ResizeObserver(resize).observe(canvas);
+  let orbiting = false, orbitSpeed = 0.004;
+  (function loop(){
+    requestAnimationFrame(loop);
+    if (orbiting) { theta += orbitSpeed; updateCam(); }
+    renderer.render(scene, camera);
+  })();
+  window.setOrbit = v => orbiting = v;
+  window.orbitFaster = f => orbitSpeed = Math.max(0.0005, Math.min(0.05, orbitSpeed * f));
+  let gsViewer = null, gsMode = false;
+  window.setViewMode = async (mode, plyUrl) => {
+    if (mode === 'gs') {
+      if (!plyUrl) return;
+      const GS3D = await import('@mkkellogg/gaussian-splats-3d');
+      if (gsViewer) { scene.remove(gsViewer); gsViewer.dispose && gsViewer.dispose(); gsViewer = null; }
+      gsViewer = new GS3D.DropInViewer({ gpuAcceleratedSort: false, sharedMemoryForWorkers: false });
+      // formato precisa ser explícito: a URL tem "?t=..." para evitar cache, o que quebra a detecção por extensão
+      await gsViewer.addSplatScene(plyUrl, { showLoadingUI: false, format: GS3D.SceneFormat.Ply });
+      gsViewer.rotation.x = Math.PI; // mesmo flip de exibição da nuvem de pontos
+      scene.add(gsViewer);
+      if (ed.flip) ed.flip.visible = false;
+      if (ptsObj) ptsObj.visible = false;
+      gsMode = true;
+    } else {
+      if (gsViewer) { scene.remove(gsViewer); gsViewer.dispose && gsViewer.dispose(); gsViewer = null; }
+      if (ed.flip) ed.flip.visible = true;
+      if (ptsObj) ptsObj.visible = true;
+      gsMode = false;
+    }
+  };
+  window.setView = v => {
+    const views = { front:[Math.PI/2, Math.PI/2], back:[-Math.PI/2, Math.PI/2], right:[0, Math.PI/2],
+      left:[Math.PI, Math.PI/2], top:[Math.PI/2, 0.06], bottom:[Math.PI/2, Math.PI-0.06] };
+    if (views[v]) { [theta, phi] = views[v]; updateCam(); }
+  };
+  updateCam();
+
+  // Parser PLY binário/ASCII minimalista (vértices xyz + rgb se houver)
+  async function loadPly(url) {
+    const buf = await (await fetch(url)).arrayBuffer();
+    const head = new TextDecoder().decode(buf.slice(0, 4096));
+    const hEnd = head.indexOf('end_header') + 'end_header'.length + 1;
+    const lines = head.slice(0, hEnd).split('\n');
+    let n = 0, props = [], ascii = head.includes('format ascii');
+    for (const l of lines) {
+      if (l.startsWith('element vertex')) n = parseInt(l.split(/\s+/)[2]);
+      if (l.startsWith('property') && n && !props.done) props.push(l.trim().split(/\s+/));
+      if (l.startsWith('element') && !l.includes('vertex') && props.length) props.done = true;
+    }
+    const pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+    if (ascii) {
+      const body = new TextDecoder().decode(buf.slice(hEnd)).split('\n');
+      for (let i = 0; i < n; i++) {
+        const f = body[i].trim().split(/\s+/).map(Number);
+        pos.set([f[0], f[1], f[2]], i * 3);
+        const ci = props.findIndex(p => p[2] === 'red');
+        col.set(ci >= 0 ? [f[ci]/255, f[ci+1]/255, f[ci+2]/255] : [0.7,0.7,0.8], i * 3);
+      }
+    } else {
+      const sizes = { float:4, double:8, uchar:1, uint8:1, int:4, uint:4, short:2, ushort:2, char:1 };
+      let stride = 0; const offs = {};
+      for (const p of props) { offs[p[2]] = stride; stride += sizes[p[1]] || 4; }
+      const dv = new DataView(buf, hEnd);
+      const rd = (o, t) => t === 'float' ? dv.getFloat32(o, true) : t === 'double' ? dv.getFloat64(o, true) : dv.getUint8(o);
+      const tOf = name => (props.find(p => p[2] === name) || [])[1];
+      for (let i = 0; i < n; i++) {
+        const b = i * stride;
+        pos.set([rd(b+offs.x,tOf('x')), rd(b+offs.y,tOf('y')), rd(b+offs.z,tOf('z'))], i*3);
+        if ('red' in offs) col.set([dv.getUint8(b+offs.red)/255, dv.getUint8(b+offs.green)/255, dv.getUint8(b+offs.blue)/255], i*3);
+        else col.set([0.7,0.7,0.8], i*3);
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    return new THREE.Points(g, new THREE.PointsMaterial({ size: 0.02, vertexColors: true }));
+  }
+
+  window.showPreview = async (pointsUrl, camsUrl) => {
+    try {
+      if (ptsObj) scene.remove(ptsObj);
+      if (camsObj) scene.remove(camsObj);
+      ptsObj = await loadPly(pointsUrl);
+      // COLMAP é Y-para-baixo: vira de cabeça para cima
+      ptsObj.rotation.x = Math.PI; scene.add(ptsObj);
+      const cams = await (await fetch(camsUrl)).json();
+      camsObj = new THREE.Group(); camsObj.rotation.x = Math.PI;
+      const pathPts = cams.map(c => new THREE.Vector3(...c.pos));
+      camsObj.add(new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(pathPts),
+        new THREE.LineBasicMaterial({ color: 0xa78bfa })));
+      const coneG = new THREE.ConeGeometry(0.04, 0.09, 4);
+      const coneM = new THREE.MeshBasicMaterial({ color: 0x8b5cf6, wireframe: true });
+      for (const c of cams) {
+        const cone = new THREE.Mesh(coneG, coneM);
+        cone.position.set(...c.pos);
+        cone.lookAt(new THREE.Vector3(...c.pos).add(new THREE.Vector3(...c.dir)));
+        cone.rotateX(Math.PI / 2);
+        camsObj.add(cone);
+      }
+      scene.add(camsObj);
+      // enquadra
+      const box = new THREE.Box3().setFromObject(ptsObj);
+      const c = box.getCenter(new THREE.Vector3());
+      target.copy(c); radius = Math.max(1, box.getSize(new THREE.Vector3()).length() * 0.6);
+      updateCam();
+      document.getElementById('vpBadge').style.display = 'block';
+      document.getElementById('placeholder').style.display = 'none';
+      document.getElementById('tPoints').innerHTML = '⁘ Nuvem esparsa — <span class="on">' + (ptsObj.geometry.attributes.position.count) + ' pontos</span>';
+      document.getElementById('tCams').innerHTML = '🎦 Câmeras — <span class="on">' + cams.length + ' poses</span>';
+    } catch (e) { console.error(e); }
+  };
+  window.setPtsVisible = v => { if (ptsObj) ptsObj.visible = v; };
+  window.setCamsVisible = v => { if (camsObj) camsObj.visible = v; };
+  window.resetView = () => { const o = ed.obj || ptsObj; if (o) { const box = new THREE.Box3().setFromObject(o); target.copy(box.getCenter(new THREE.Vector3())); radius = Math.max(1, box.getSize(new THREE.Vector3()).length()*0.6); updateCam(); } };
+
+  // ══════════ EDITOR DE SPLAT ══════════
+  const ed = {
+    obj: null, raw: null, header: null, stride: 0, offs: {}, n: 0,
+    kept: null, sel: null, mode: null, gizmo: null, dragAxis: null,
+  };
+  const $$ = id => document.getElementById(id);
+
+  function plyHeader(buf) {
+    const head = new TextDecoder().decode(buf.slice(0, 8192));
+    const end = head.indexOf('end_header') + 'end_header'.length + 1;
+    const lines = head.slice(0, end).split('\n');
+    let n = 0; const props = [];
+    for (const l of lines) {
+      if (l.startsWith('element vertex')) n = parseInt(l.split(/\s+/)[2]);
+      else if (l.startsWith('property') && n) props.push(l.trim().split(/\s+/));
+    }
+    const sizes = { float:4, double:8, uchar:1, uint8:1, int:4, uint:4, short:2, ushort:2, char:1 };
+    let stride = 0; const offs = {};
+    for (const pr of props) { offs[pr[2]] = { o: stride, t: pr[1] }; stride += sizes[pr[1]] || 4; }
+    return { n, stride, offs, dataStart: end, headerText: head.slice(0, end) };
+  }
+
+  window.loadEditor = async (url) => {
+    const buf = await (await fetch(url)).arrayBuffer();
+    const h = plyHeader(buf);
+    ed.raw = buf; ed.header = h; ed.n = h.n; ed.stride = h.stride; ed.offs = h.offs;
+    ed.kept = new Uint8Array(h.n).fill(1);
+    ed.sel = new Uint8Array(h.n);
+    const dv = new DataView(buf, h.dataStart);
+    const pos = new Float32Array(h.n * 3), col = new Float32Array(h.n * 3);
+    const ox = h.offs.x.o, oy = h.offs.y.o, oz = h.offs.z.o;
+    const dc = h.offs.f_dc_0 ? [h.offs.f_dc_0.o, h.offs.f_dc_1.o, h.offs.f_dc_2.o] : null;
+    const hasRGB = h.offs.red;
+    for (let i = 0; i < h.n; i++) {
+      const b = i * h.stride;
+      pos[i*3] = dv.getFloat32(b+ox, true); pos[i*3+1] = dv.getFloat32(b+oy, true); pos[i*3+2] = dv.getFloat32(b+oz, true);
+      if (dc) for (let c = 0; c < 3; c++) col[i*3+c] = Math.min(1, Math.max(0, 0.5 + 0.2821 * dv.getFloat32(b+dc[c], true)));
+      else if (hasRGB) { col[i*3]=dv.getUint8(b+h.offs.red.o)/255; col[i*3+1]=dv.getUint8(b+h.offs.green.o)/255; col[i*3+2]=dv.getUint8(b+h.offs.blue.o)/255; }
+      else { col[i*3]=col[i*3+1]=col[i*3+2]=0.75; }
+    }
+    if (ed.obj && ed.flip) ed.flip.remove(ed.obj);
+    if (ptsObj) { scene.remove(ptsObj); ptsObj = null; }
+    if (camsObj) { scene.remove(camsObj); camsObj = null; }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    ed.baseCol = col.slice();
+    ed.obj = new THREE.Points(g, new THREE.PointsMaterial({ size: 0.015, vertexColors: true }));
+    if (!ed.flip) { ed.flip = new THREE.Group(); ed.flip.rotation.x = Math.PI; scene.add(ed.flip); } // COLMAP/3DGS: Y p/ baixo (só exibição)
+    ed.flip.clear(); ed.flip.add(ed.obj);
+    makeGizmo();
+    window.resetView();
+    document.getElementById('vpBadge').textContent = 'Editor de splat — ' + h.n.toLocaleString() + ' gaussians';
+    document.getElementById('vpBadge').style.display = 'block';
+    document.getElementById('placeholder').style.display = 'none';
+    document.getElementById('glcanvas').style.display = 'block';
+    window.edDirty = false;
+  };
+
+  function refreshColors() {
+    const col = ed.obj.geometry.attributes.color.array;
+    for (let i = 0; i < ed.n; i++) {
+      if (!ed.kept[i]) { col[i*3]=col[i*3+1]=col[i*3+2]=0.06; }
+      else if (ed.sel[i]) { col[i*3]=1; col[i*3+1]=0.45; col[i*3+2]=0.1; }
+      else { col[i*3]=ed.baseCol[i*3]; col[i*3+1]=ed.baseCol[i*3+1]; col[i*3+2]=ed.baseCol[i*3+2]; }
+    }
+    ed.obj.geometry.attributes.color.needsUpdate = true;
+  }
+
+  // ─ Gizmo ─
+  function makeGizmo() {
+    if (ed.gizmo) scene.remove(ed.gizmo);
+    const g = new THREE.Group();
+    const axes = [ ['x', 0x8b5cf6, new THREE.Vector3(1,0,0)], ['y', 0x22c55e, new THREE.Vector3(0,1,0)], ['z', 0xc4b5fd, new THREE.Vector3(0,0,1)] ];
+    for (const [name, color, dir] of axes) {
+      const mat = new THREE.MeshBasicMaterial({ color, depthTest: false });
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 1, 6), mat);
+      shaft.position.copy(dir.clone().multiplyScalar(0.5));
+      shaft.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir);
+      const tip = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.14, 10), mat);
+      tip.position.copy(dir);
+      tip.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir);
+      const grab = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 1.15, 6), new THREE.MeshBasicMaterial({ visible: false }));
+      grab.position.copy(dir.clone().multiplyScalar(0.55));
+      grab.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir);
+      grab.userData.axis = dir.clone();
+      shaft.userData.part = 'arrows'; tip.userData.part = 'arrows'; grab.userData.part = 'arrows';
+      g.add(shaft, tip, grab);
+    }
+    const ringDefs = [ ['x', 0x8b5cf6, [0, Math.PI/2, 0]], ['y', 0x22c55e, [Math.PI/2, 0, 0]], ['z', 0xc4b5fd, [0, 0, 0]] ];
+    for (const [ax, color, rot] of ringDefs) {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.75, 0.014, 8, 48), new THREE.MeshBasicMaterial({ color, depthTest: false }));
+      const grabR = new THREE.Mesh(new THREE.TorusGeometry(0.75, 0.09, 6, 32), new THREE.MeshBasicMaterial({ visible: false }));
+      ring.rotation.set(...rot); grabR.rotation.set(...rot);
+      grabR.userData.ringAxis = ax;
+      ring.userData.part = 'ring'; grabR.userData.part = 'ring';
+      g.add(ring, grabR);
+    }
+    const cube = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 0.16), new THREE.MeshBasicMaterial({ color: 0x86efac, depthTest: false }));
+    const cubeGrab = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), new THREE.MeshBasicMaterial({ visible: false }));
+    cubeGrab.userData.scaleCube = true;
+    cube.userData.part = 'scale'; cubeGrab.userData.part = 'scale';
+    g.add(cube, cubeGrab);
+    g.visible = false; g.renderOrder = 999;
+    ed.gizmo = g; scene.add(g);
+  }
+  function gizmoSync() { if (ed.gizmo && ed.obj) { ed.obj.getWorldPosition(ed.gizmo.position); const s = radius * 0.35; ed.gizmo.scale.set(s, s, s); } }
+
+  const ray = new THREE.Raycaster(); const mouseN = new THREE.Vector2();
+  function setMouse(e) { const r = canvas.getBoundingClientRect(); mouseN.set(((e.clientX-r.left)/r.width)*2-1, -((e.clientY-r.top)/r.height)*2+1); }
+
+  // ─ Seleção retangular ─
+  const selBox = document.createElement('div');
+  selBox.style.cssText = 'position:absolute;border:1px dashed #a78bfa;background:rgba(139,92,246,.12);display:none;pointer-events:none;z-index:5';
+  document.getElementById('viewportWrap').appendChild(selBox);
+  let selStart = null;
+
+  window.setEditMode = m => {
+    ed.mode = ed.mode === m ? null : m;
+    if (ed.gizmo) {
+      ed.gizmo.visible = (ed.mode === 'move' || ed.mode === 'rot' || ed.mode === 'scale') && !!ed.obj;
+      ed.gizmo.children.forEach(c => {
+        if (c.userData.part === 'arrows') c.visible = ed.mode === 'move';
+        if (c.userData.part === 'ring') c.visible = ed.mode === 'rot';
+        if (c.userData.part === 'scale') c.visible = ed.mode === 'scale';
+      });
+    }
+    gizmoSync();
+    ['tMove','tRotY','tScale','tSel'].forEach(id => $$(id) && $$(id).classList.remove('sel'));
+    if (ed.mode === 'move') $$('tMove').classList.add('sel');
+    if (ed.mode === 'rot') $$('tRotY').classList.add('sel');
+    if (ed.mode === 'scale') $$('tScale').classList.add('sel');
+    if (ed.mode === 'select') $$('tSel').classList.add('sel');
+  };
+
+  canvas.addEventListener('mousedown', e => {
+    if (!ed.obj || e.button !== 0) return;
+    if (ed.mode === 'move' || ed.mode === 'rot' || ed.mode === 'scale') {
+      setMouse(e); ray.setFromCamera(mouseN, camera);
+      const hits = ray.intersectObjects(ed.gizmo.children.filter(c => !c.material.visible === false || true), false)
+        .filter(h => (ed.mode === 'move' && h.object.userData.axis) || (ed.mode === 'rot' && h.object.userData.ringAxis) || (ed.mode === 'scale' && h.object.userData.scaleCube));
+      if (hits.length) {
+        const h = hits[0];
+        ed.dragAxis = h.object.userData.ringAxis ? ('ring_' + h.object.userData.ringAxis)
+                    : h.object.userData.scaleCube ? 'scalecube' : h.object.userData.axis;
+        snapXform();
+        dragging = 0; e.stopImmediatePropagation();
+      }
+    } else if (ed.mode === 'select') {
+      selStart = { x: e.clientX, y: e.clientY };
+      dragging = 0; e.stopImmediatePropagation();
+    }
+  }, true);
+
+  window.addEventListener('mousemove', e => {
+    if (ed.dragAxis) {
+      const scale = radius / 400;
+      const flipQi = new THREE.Quaternion().setFromEuler(ed.flip.rotation).invert();
+      if (typeof ed.dragAxis === 'string' && ed.dragAxis.startsWith('ring_')) {
+        const ax = ed.dragAxis.slice(5);
+        const worldAxis = ax === 'x' ? new THREE.Vector3(1,0,0) : ax === 'y' ? new THREE.Vector3(0,1,0) : new THREE.Vector3(0,0,1);
+        const localAxis = worldAxis.clone().applyQuaternion(flipQi).normalize();
+        const q = new THREE.Quaternion().setFromAxisAngle(localAxis, (e.movementX + e.movementY) * 0.008);
+        ed.obj.quaternion.premultiply(q);
+      } else if (ed.dragAxis === 'scalecube') {
+        const f = 1 - e.movementY * 0.006;
+        const ns = Math.max(0.01, ed.obj.scale.x * f);
+        ed.obj.scale.set(ns, ns, ns);
+      } else {
+        const axisWorld = ed.dragAxis.clone();
+        const camRight = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+        const camUp = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
+        const move = camRight.multiplyScalar(e.movementX * scale).add(camUp.multiplyScalar(-e.movementY * scale));
+        const amount = move.dot(axisWorld);
+        ed.obj.position.addScaledVector(axisWorld.clone().applyQuaternion(flipQi), amount);
+      }
+      gizmoSync();
+    } else if (selStart) {
+      const r = canvas.getBoundingClientRect();
+      const x1 = Math.min(selStart.x, e.clientX) - r.left, y1 = Math.min(selStart.y, e.clientY) - r.top;
+      selBox.style.display = 'block';
+      selBox.style.left = x1 + 'px'; selBox.style.top = y1 + 'px';
+      selBox.style.width = Math.abs(e.clientX - selStart.x) + 'px';
+      selBox.style.height = Math.abs(e.clientY - selStart.y) + 'px';
+    }
+  });
+
+  window.addEventListener('mouseup', e => {
+    if (ed.dragAxis) { ed.dragAxis = null; return; }
+    if (selStart) {
+      const r = canvas.getBoundingClientRect();
+      const x1 = (Math.min(selStart.x, e.clientX) - r.left) / r.width * 2 - 1;
+      const x2 = (Math.max(selStart.x, e.clientX) - r.left) / r.width * 2 - 1;
+      const y1 = -((Math.max(selStart.y, e.clientY) - r.top) / r.height * 2 - 1);
+      const y2 = -((Math.min(selStart.y, e.clientY) - r.top) / r.height * 2 - 1);
+      selStart = null; selBox.style.display = 'none';
+      const pos = ed.obj.geometry.attributes.position.array;
+      ed.obj.updateMatrixWorld();
+      const mvp = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix,
+        new THREE.Matrix4().multiplyMatrices(camera.matrixWorldInverse, ed.obj.matrixWorld));
+      const v = new THREE.Vector3();
+      const add = e.shiftKey;
+      for (let i = 0; i < ed.n; i++) {
+        if (!ed.kept[i]) continue;
+        v.set(pos[i*3], pos[i*3+1], pos[i*3+2]).applyMatrix4(mvp);
+        const inside = v.x >= x1 && v.x <= x2 && v.y >= y1 && v.y <= y2 && v.z < 1;
+        if (inside) ed.sel[i] = 1; else if (!add) ed.sel[i] = 0;
+      }
+      refreshColors();
+    }
+  });
+
+  const undoStack = [], redoStack = [];
+  function snapKept(indices) { undoStack.push({ type: 'kept', indices }); redoStack.length = 0; if (undoStack.length > 30) undoStack.shift(); window.edDirty = true; }
+  function snapXform() { undoStack.push({ type: 'xform', pos: ed.obj.position.clone(), q: ed.obj.quaternion.clone(), s: ed.obj.scale.x }); redoStack.length = 0; window.edDirty = true; }
+  window.edUndo = () => {
+    const op = undoStack.pop(); if (!op) return;
+    window.edDirty = true;
+    if (op.type === 'kept') { const redo = []; for (const i of op.indices) { redo.push(i); ed.kept[i] = 1; } redoStack.push({ type:'kept', indices: redo }); refreshColors(); }
+    else { redoStack.push({ type:'xform', pos: ed.obj.position.clone(), q: ed.obj.quaternion.clone(), s: ed.obj.scale.x });
+      ed.obj.position.copy(op.pos); ed.obj.quaternion.copy(op.q); ed.obj.scale.set(op.s,op.s,op.s); gizmoSync(); }
+  };
+  window.edRedo = () => {
+    const op = redoStack.pop(); if (!op) return;
+    window.edDirty = true;
+    if (op.type === 'kept') { const undo = []; for (const i of op.indices) { undo.push(i); ed.kept[i] = 0; } undoStack.push({ type:'kept', indices: undo }); refreshColors(); }
+    else { undoStack.push({ type:'xform', pos: ed.obj.position.clone(), q: ed.obj.quaternion.clone(), s: ed.obj.scale.x });
+      ed.obj.position.copy(op.pos); ed.obj.quaternion.copy(op.q); ed.obj.scale.set(op.s,op.s,op.s); gizmoSync(); }
+  };
+  window.edDelete = () => {
+    const removed = [];
+    for (let i = 0; i < ed.n; i++) if (ed.sel[i]) { removed.push(i); ed.kept[i] = 0; ed.sel[i] = 0; }
+    if (removed.length) snapKept(removed);
+    refreshColors();
+  };
+  window.edCrop = () => {
+    let any = false; for (let i = 0; i < ed.n; i++) if (ed.sel[i]) { any = true; break; }
+    if (!any) return;
+    const removed = [];
+    for (let i = 0; i < ed.n; i++) { if (ed.kept[i] && !ed.sel[i]) { removed.push(i); ed.kept[i] = 0; } ed.sel[i] = 0; }
+    if (removed.length) snapKept(removed);
+    refreshColors();
+  };
+  window.edCenter = () => {
+    if (!ed.obj) return;
+    const pos = ed.obj.geometry.attributes.position.array;
+    let cx=0, cy=0, cz=0, k=0;
+    for (let i = 0; i < ed.n; i++) if (ed.kept[i]) { cx+=pos[i*3]; cy+=pos[i*3+1]; cz+=pos[i*3+2]; k++; }
+    if (!k) return;
+    cx/=k; cy/=k; cz/=k;
+    const cLocal = new THREE.Vector3(cx, cy, cz).applyMatrix4(new THREE.Matrix4().compose(ed.obj.position, ed.obj.quaternion, ed.obj.scale));
+    ed.obj.position.sub(cLocal);
+    target.set(0,0,0); updateCam(); gizmoSync();
+  };
+  window.edClean = (minOpacPct) => {
+    if (!ed.obj || !ed.offs.opacity) return 0;
+    const dv = new DataView(ed.raw, ed.header.dataStart);
+    const thr = Math.log(minOpacPct / (100 - minOpacPct)); // logit
+    let rem = 0; const removedC = [];
+    for (let i = 0; i < ed.n; i++) {
+      if (ed.kept[i] && dv.getFloat32(i*ed.stride + ed.offs.opacity.o, true) < thr) { ed.kept[i] = 0; rem++; removedC.push(i); }
+    }
+    if (removedC.length) snapKept(removedC);
+    refreshColors(); return rem;
+  };
+  window.edScale = f => { if (ed.obj) { ed.obj.scale.set(f, f, f); gizmoSync(); window.edDirty = true; } };
+
+  window.edSave = async () => {
+    if (!ed.obj) return null;
+    let kept = 0; for (let i = 0; i < ed.n; i++) kept += ed.kept[i];
+    // transformação total (sem o flip de exibição rotation.x=PI)
+    const s = ed.obj.scale.x;
+    const qrot = ed.obj.quaternion.clone();
+    const t = ed.obj.position.clone();
+    const h = ed.header;
+    const compact = document.getElementById('edCompact').checked;
+    const dropOff = [];
+    let headerText = h.headerText;
+    if (compact) {
+      headerText = headerText.split('\n').filter(l => !/property\s+\w+\s+f_rest_/.test(l)).join('\n');
+      for (const k in h.offs) if (/^f_rest_/.test(k)) dropOff.push([h.offs[k].o, 4]);
+      dropOff.sort((a, b) => a[0] - b[0]);
+    }
+    const dropBytes = dropOff.reduce((a, d) => a + d[1], 0);
+    const outStride = h.stride - dropBytes;
+    const headerOut = headerText.replace(/element vertex \d+/, 'element vertex ' + kept);
+    const hb = new TextEncoder().encode(headerOut);
+    const out = new Uint8Array(hb.length + kept * outStride);
+    out.set(hb, 0);
+    const src = new Uint8Array(ed.raw, h.dataStart);
+    const dvS = new DataView(ed.raw, h.dataStart);
+    let w = hb.length;
+    const p = new THREE.Vector3(), q = new THREE.Quaternion();
+    const oq = h.offs.rot_0 ? [h.offs.rot_0.o, h.offs.rot_1.o, h.offs.rot_2.o, h.offs.rot_3.o] : null;
+    const os = h.offs.scale_0 ? [h.offs.scale_0.o, h.offs.scale_1.o, h.offs.scale_2.o] : null;
+    const lnS = Math.log(s);
+    for (let i = 0; i < ed.n; i++) {
+      if (!ed.kept[i]) continue;
+      if (!dropBytes) out.set(src.subarray(i*h.stride, (i+1)*h.stride), w);
+      else {
+        let rp = i*h.stride, wp = w;
+        for (const [off, len] of dropOff) {
+          out.set(src.subarray(rp, i*h.stride + off), wp);
+          wp += (i*h.stride + off) - rp; rp = i*h.stride + off + len;
+        }
+        out.set(src.subarray(rp, (i+1)*h.stride), wp);
+      }
+      const dvO = new DataView(out.buffer, w);
+      const om = name => {
+        let o = h.offs[name].o;
+        for (const [off, len] of dropOff) if (off < h.offs[name].o) o -= len;
+        return o;
+      };
+      p.set(dvS.getFloat32(i*h.stride+h.offs.x.o, true), dvS.getFloat32(i*h.stride+h.offs.y.o, true), dvS.getFloat32(i*h.stride+h.offs.z.o, true));
+      p.multiplyScalar(s).applyQuaternion(qrot).add(t);
+      dvO.setFloat32(om('x'), p.x, true); dvO.setFloat32(om('y'), p.y, true); dvO.setFloat32(om('z'), p.z, true);
+      if (oq) {
+        q.set(dvS.getFloat32(i*h.stride+oq[1], true), dvS.getFloat32(i*h.stride+oq[2], true), dvS.getFloat32(i*h.stride+oq[3], true), dvS.getFloat32(i*h.stride+oq[0], true));
+        q.premultiply(qrot);
+        dvO.setFloat32(om('rot_0'), q.w, true); dvO.setFloat32(om('rot_1'), q.x, true); dvO.setFloat32(om('rot_2'), q.y, true); dvO.setFloat32(om('rot_3'), q.z, true);
+      }
+      if (os && s !== 1) for (const nm of ['scale_0','scale_1','scale_2']) dvO.setFloat32(om(nm), dvS.getFloat32(i*h.stride+h.offs[nm].o, true) + lnS, true);
+      w += outStride;
+    }
+    return out.buffer;
+  };
+</script>
+
+<script>
+  let videos = [], outDir = null, lastPly = null, running = false, aligned = false;
+  const $ = id => document.getElementById(id);
+  const order = ['setup','frames','colmap','train'];
+  const stageNames = { setup:'Preparando ferramentas', frames:'Extraindo frames', colmap:'Reconstruindo câmeras', train:'Treinando 3DGS' };
+
+  document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.tabpage').forEach(x => x.classList.remove('active'));
+    t.classList.add('active'); $('pg-' + t.dataset.t).classList.add('active');
+  });
+
+  const log = (l, replace) => {
+    const el = $('log');
+    if (replace) {
+      const lines = el.textContent.split('\n');
+      if (lines.length > 1 && lines[lines.length - 2].startsWith('Baixando')) lines[lines.length - 2] = l;
+      else lines.splice(lines.length - 1, 0, l);
+      el.textContent = lines.join('\n');
+    } else el.textContent += l + '\n';
+    el.scrollTop = el.scrollHeight;
+  };
+  const setStage = (s, cls) => { $('st-' + s).className = 'stage ' + cls; };
+  const enableStart = v => { $('btnStart').disabled = $('btnStart2').disabled = $('btnAlign').disabled = !v; };
+
+  function renderVideos() {
+    const el = $('videoList');
+    el.innerHTML = '';
+    videos.forEach((v, i) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'border-bottom:1px solid var(--line);padding:6px 0';
+      const name = v.path.split(/[\\\/]/).pop();
+      row.innerHTML =
+        '<div style="display:flex;justify-content:space-between;align-items:center">' +
+        '<b style="font-size:11px">' + name + '</b>' +
+        '<span data-del="' + i + '" style="cursor:pointer;color:var(--mut)">🗑</span></div>' +
+        '<div style="display:flex;gap:4px;margin-top:4px">' +
+        '<input data-f="start" data-i="' + i + '" placeholder="início" value="' + v.start + '" style="width:33%">' +
+        '<input data-f="end" data-i="' + i + '" placeholder="fim" value="' + v.end + '" style="width:33%">' +
+        '<input data-f="interval" data-i="' + i + '" placeholder="interv. s" value="' + v.interval + '" style="width:33%"></div>';
+      el.appendChild(row);
+    });
+    el.querySelectorAll('[data-del]').forEach(x => x.onclick = () => { videos.splice(+x.dataset.del, 1); refreshVideos(); });
+    el.querySelectorAll('input').forEach(x => x.onchange = () => { videos[+x.dataset.i][x.dataset.f] = x.value; aligned = false; });
+    $('tVideo').innerHTML = '🎞 Vídeos — ' + (videos.length ? '<span class="on">' + videos.length + '</span>' : '<i>nenhum</i>');
+    $('sbVideo').textContent = videos.length ? videos.length + ' vídeo(s)' : '';
+    enableStart(videos.length > 0);
+  }
+  function refreshVideos() { aligned = false; renderVideos(); }
+  async function addVideos() {
+    const vs = await window.bruxo.pickVideo();
+    if (vs) { vs.forEach(v => videos.push({ path: v, start: '', end: '', interval: '0.5' })); refreshVideos(); }
+  }
+  $('btnVideo').onclick = $('btnAddVideo').onclick = addVideos;
+  $('btnOut').onclick = $('btnOut2').onclick = async () => {
+    outDir = await window.bruxo.pickOutDir();
+    if (outDir) $('outPath').textContent = outDir;
+  };
+  const opts = () => ({ videos, outDir, steps: +$('steps').value, maxSize: +$('maxSize').value });
+  const begin = () => {
+    running = true; enableStart(false);
+    $('log').textContent = ''; order.forEach(s => setStage(s, ''));
+    $('statusOverlay').style.display = 'block';
+    $('viewer').style.display = 'none'; $('glcanvas').style.display = 'block';
+    $('sbState').textContent = 'Processando…';
+  };
+  $('btnAlign').onclick = () => { if (!running && videos.length) { begin(); window.bruxo.align(opts()); } };
+  const start = () => { if (!running && videos.length) { begin(); window.bruxo.train({ ...opts(), forceAlign: !aligned }); } };
+  $('btnStart').onclick = $('btnStart2').onclick = start;
+  $('btnFolder').onclick = () => lastPly && window.bruxo.openFolder(lastPly);
+  let lastViewerUrl = null;
+  $('tMove').onclick = () => window.setEditMode('move');
+  $('tRotY').onclick = () => window.setEditMode('rot');
+  $('tScale').onclick = () => window.setEditMode('scale');
+  $('tSel').onclick = () => window.setEditMode('select');
+  $('tDel').onclick = () => window.edDelete();
+  $('tCrop').onclick = () => window.edCrop();
+  $('tCenter').onclick = () => window.edCenter();
+  $('tClean').onclick = () => {
+    const n = window.edClean(+$('edOpac').value);
+    log('🧹 Limpeza: ' + n + ' gaussians removidos (opacidade < ' + $('edOpac').value + '%).');
+  };
+  $('edScale').oninput = () => window.edScale(Math.pow(10, +$('edScale').value));
+  $('tSave').onclick = async () => {
+    const buf = await window.edSave();
+    if (!buf) return;
+    const r = await window.bruxo.savePly(buf); // main.js gera BruxoSplat_0001.ply, _0002.ply...
+    lastPly = r.path; lastViewerUrl = r.viewerUrl;
+    $('sbPly').textContent = r.path.split(/[\\\/]/).pop();
+    log('💾 Salvo: ' + r.path);
+  };
+  const showWeb = url => {
+    $('glcanvas').style.display = 'none'; $('vpBadge').style.display = 'none';
+    const v = $('viewer'); v.style.display = 'block'; v.src = url;
+    $('btnBackEd').style.display = 'inline-block';
+  };
+  $('btnBackEd').onclick = () => {
+    const v = $('viewer'); v.style.display = 'none'; v.src = 'about:blank';
+    $('glcanvas').style.display = 'block'; $('vpBadge').style.display = 'block';
+    $('btnBackEd').style.display = 'none';
+  };
+  // aplica as edições atuais (centro, rotação, exclusões…) num .ply, só quando algo mudou de fato
+  let exportedUrl = null;
+  async function syncEdits() {
+    if (!window.edSave) return lastViewerUrl;
+    if (!window.edDirty && exportedUrl) return exportedUrl; // nada mudou: reusa o último export
+    try {
+      const buf = await window.edSave();
+      if (buf) {
+        const r = await window.bruxo.savePly(buf, 'splat_view.ply'); // nome fixo: sobrescreve, não acumula arquivos
+        lastPly = r.path; lastViewerUrl = r.viewerUrl; exportedUrl = r.viewerUrl;
+        window.edDirty = false;
+        log('🔄 Edições aplicadas: ' + r.path.split(/[\\\/]/).pop());
+      }
+    } catch (e) { log('Aviso: não deu para aplicar edições (' + e.message + ')'); }
+    return exportedUrl || lastViewerUrl;
+  }
+  $('btnSuper').onclick = async () => {
+    const u = await syncEdits();
+    if (u) showWeb('https://superspl.at/editor?load=' + encodeURIComponent(u.split('url=')[1] + '?t=' + Date.now()));
+  };
+  const openWebEdit = async () => { const u = await syncEdits(); if (u) showWeb(u + '&t=' + Date.now()); };
+  const setModeBtns = m => {
+    ['mPoints','mGS','mMesh'].forEach(id => $(id).classList.remove('sel'));
+    $(m).classList.add('sel');
+  };
+  $('mPoints').onclick = () => { setModeBtns('mPoints'); window.setViewMode('points'); };
+  $('mGS').onclick = async () => {
+    const u = await syncEdits();
+    if (!u) { log('Gere ou abra um splat primeiro.'); return; }
+    setModeBtns('mGS');
+    log('✴ Carregando render Gaussians…');
+    try { await window.setViewMode('gs', u.split('url=')[1] + '?t=' + Date.now()); log('✴ Modo GS ativo.'); }
+    catch (e) { log('Erro no modo GS: ' + e.message); setModeBtns('mPoints'); window.setViewMode('points'); }
+  };
+  $('tWeb').onclick = openWebEdit;
+  $('btnWebTop').onclick = openWebEdit;
+  const iaRun = async (key, pick) => {
+    const input = await pick();
+    if (!input) return;
+    $('statusOverlay').style.display = 'block';
+    $('sbState').textContent = 'Modo IA…';
+    window.bruxo.modelRun(key, input);
+  };
+  $('iaInstallSharp').onclick = () => { $('statusOverlay').style.display='block'; window.bruxo.modelInstall('sharp'); };
+  $('iaInstallTripo').onclick = () => { $('statusOverlay').style.display='block'; window.bruxo.modelInstall('triposplat'); };
+  $('iaRunSharp').onclick = () => iaRun('sharp', window.bruxo.pickImage);
+  $('iaRunTripo').onclick = () => iaRun('triposplat', window.bruxo.pickImage);
+  $('iaRunSharp4d').onclick = async () => {
+    const vs = await window.bruxo.pickVideo();
+    if (!vs || !vs.length) return;
+    $('statusOverlay').style.display = 'block';
+    $('sbState').textContent = 'SHARP 4D…';
+    window.bruxo.sharp4d(vs[0], $('s4dInterval').value);
+  };
+  window.addEventListener('keydown', e => {
+    if (e.key === 'Delete') window.edDelete();
+    if (e.key === 'Escape') window.setEditMode(null);
+    if (e.key === 'F2') window.setView('top');
+    if (e.key === 'F3') window.setView('right');
+    if (e.key === 'F4') window.setView('front');
+    if (e.ctrlKey && e.key.toLowerCase() === 'z') { e.shiftKey ? window.edRedo() : window.edUndo(); }
+  });
+  $('viewSel').onchange = () => { if ($('viewSel').value !== 'free') window.setView($('viewSel').value); };
+  $('pbPlay').onclick = () => window.setOrbit(true);
+  $('pbStop').onclick = () => window.setOrbit(false);
+  $('pbSlow').onclick = () => window.orbitFaster(0.7);
+  $('pbFast').onclick = () => window.orbitFaster(1.4);
+  // move controles do viewport para a barra fixa (fora do view)
+  $('slotBack').appendChild($('btnBackEd'));
+  $('slotView').appendChild($('viewSel'));
+  $('slotPlay').appendChild($('playbar'));
+  $('slotMode').appendChild($('modeSel'));
+  window.bruxo.onMenu(async a => {
+    if (a === 'new') location.reload();
+    if (a === 'open') {
+      const r = await window.bruxo.openPly();
+      if (r) { lastViewerUrl = r.viewerUrl; $('viewer').style.display='none'; $('glcanvas').style.display='block';
+        $('btnSuper').disabled = false; $('btnFolder').disabled = false; $('btnWebTop').disabled = false;
+        window.loadEditor(r.viewerUrl.split('url=')[1]); log('📂 Aberto: ' + r.path); }
+    }
+    if (a === 'save') $('tSave').click();
+    if (a === 'savecompact') { $('edCompact').checked = true; $('tSave').click(); }
+    if (a === 'import') $('btnVideo').click();
+    if (a === 'undo') window.edUndo();
+    if (a === 'redo') window.edRedo();
+    if (a === 'delete') window.edDelete();
+    if (a === 'crop') window.edCrop();
+    if (a === 'center') window.edCenter();
+    if (a === 'clean') $('tClean').click();
+  });
+
+  // toggles do viewport
+  const syncToggles = () => { window.setPtsVisible($('cbPoints').checked); window.setCamsVisible($('cbCams').checked); };
+  $('cbPoints').onchange = $('cbCams').onchange = syncToggles;
+  $('tglPoints').onclick = () => { $('cbPoints').checked = !$('cbPoints').checked; syncToggles(); };
+  $('tglCams').onclick = () => { $('cbCams').checked = !$('cbCams').checked; syncToggles(); };
+  $('btnResetCam').onclick = () => window.resetView();
+
+  window.bruxo.onStatus(d => {
+    const i = order.indexOf(d.stage);
+    order.forEach((s, j) => setStage(s, j < i ? 'done' : j === i ? 'active' : ''));
+    $('stageLabel').textContent = stageNames[d.stage] || d.stage;
+    $('stageLine').textContent = d.line;
+    if (d.prog != null) { $('obarIn').style.width = (d.prog*100)+'%'; $('stagePct').textContent = (d.prog*100).toFixed(0)+'%'; }
+    else { $('obarIn').style.width = '0'; $('stagePct').textContent = ''; }
+    log(d.line, d.line.startsWith('Baixando'));
+  });
+  let snapBusy = false;
+  window.bruxo.onTrainSnap(async d => {
+    $('obarIn').style.width = (d.prog * 100) + '%';
+    $('stagePct').textContent = (d.prog * 100).toFixed(0) + '%';
+    if (snapBusy) return;
+    snapBusy = true;
+    try {
+      await window.loadEditor(d.url);
+      $('vpBadge').textContent = '✨ Treinando — splat parcial (' + (d.prog * 100).toFixed(0) + '%)';
+    } catch (e) {} finally { snapBusy = false; }
+  });
+  window.bruxo.onPreview(d => {
+    log('🔎 Preview: nuvem de pontos e trajeto da câmera carregados no viewport.');
+    window.showPreview(d.points, d.cameras);
+  });
+  window.bruxo.onAligned(() => {
+    running = false; enableStart(true); aligned = true;
+    ['setup','frames','colmap'].forEach(s => setStage(s, 'done'));
+    $('statusOverlay').style.display = 'none';
+    $('sbState').textContent = 'Câmeras alinhadas ✅ — pronto para treinar';
+    log('📐 Alinhamento concluído. Revise a nuvem/trajeto e clique em Iniciar Treino.');
+  });
+  window.bruxo.onDone(d => {
+    running = false; enableStart(true);
+    order.forEach(s => setStage(s, 'done'));
+    lastPly = d.ply;
+    const name = d.ply.split(/[\\\/]/).pop();
+    $('tSplat').innerHTML = '✨ Splat — <span class="on">' + name + '</span>';
+    $('sbPly').textContent = name; $('sbState').textContent = 'Pronto ✅';
+    $('btnFolder').disabled = false; $('btnSuper').disabled = false; $('btnWebTop').disabled = false;
+    $('statusOverlay').style.display = 'none';
+    $('placeholder').style.display = 'none';
+    lastViewerUrl = d.viewerUrl;
+    window.loadEditor(d.viewerUrl.split('url=')[1]);
+    log('✅ Salvo em: ' + d.ply);
+    log('🎨 Editor ativo: alinhe com o gizmo, selecione e limpe, depois 💾 para salvar ou 🌐 para abrir no WebEDIT.');
+  });
+  window.bruxo.onError(d => {
+    running = false; enableStart(true);
+    $('sbState').textContent = 'Erro ❌';
+    $('statusOverlay').style.display = 'none';
+    log('❌ Erro: ' + d.message);
+    document.querySelector('[data-t="log"]').click();
+  });
+</script>
+</body>
+</html>
