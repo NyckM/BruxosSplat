@@ -1,0 +1,84 @@
+BruxoSplat — Fontes dos modelos e ferramentas
+==============================================
+
+Este arquivo documenta DE ONDE cada modelo e ferramenta vem. Guarde-o junto do
+backup (BruxoSplat_modelos_backup.tar). Se algum link sair do ar, você ainda tem
+o backup pra reinstalar offline — e aqui fica registrado a origem de cada coisa.
+
+Onde os arquivos ficam guardados no seu PC
+------------------------------------------
+- Ambiente compartilhado (SHARP + utilitários) ... %APPDATA%\BruxoSplat\pyenv
+- Ambiente isolado do TripoSplat (torch 2.6) ..... %APPDATA%\BruxoSplat\pyenv_triposplat
+- Ambiente isolado do FaceAnything (torch 2.9 CUDA) %APPDATA%\BruxoSplat\pyenv_faceanything
+- Ferramentas (ffmpeg, COLMAP, Brush, uv) ........ %APPDATA%\BruxoSplat\tools
+- Repositórios clonados dos modelos .............. %APPDATA%\BruxoSplat\models_src
+- Checkpoint do FaceAnything (~15 GB) ............ %APPDATA%\BruxoSplat\models_src\FaceAnything\checkpoints
+- Pesos SHARP / TripoSR (baixados na 1ª execução, via HuggingFace) ... %USERPROFILE%\.cache\huggingface
+
+Por que ambientes separados? TripoSplat precisa de torch 2.6 (o torchmcubes é compilado
+contra ele) e FaceAnything precisa de torch 2.9 (CUDA 12.8) — versões incompatíveis. Cada
+um no seu ambiente evita que um modelo quebre o outro.
+
+(O backup_modelos.bat empacota TODAS essas pastas num único .tar automaticamente.)
+
+Modelos
+-------
+SHARP (Foto -> 3DGS)
+  Código:  pip  git+https://github.com/apple/ml-sharp.git
+  Pesos:   HuggingFace (baixados automaticamente na 1ª execução)
+  Licença: ver repositório da Apple
+
+TripoSplat (Imagem -> Asset 3D 360°) — baseado no TripoSR
+  Código:  https://github.com/VAST-AI-Research/TripoSR.git
+  Extra:   torchmcubes -> git+https://github.com/tatsy/torchmcubes.git (compilado na instalação)
+  Pesos:   HuggingFace  stabilityai/TripoSR  (baixados na 1ª execução)
+
+FaceAnything (Vídeo -> Rosto 4D)
+  Código:  https://github.com/kocasariumut/FaceAnything.git
+  Checkpoint (~15 GB): https://huggingface.co/UmutKocasari/FaceAnything/resolve/main/checkpoint.pt
+  torch/torchvision/xformers: índice CUDA cu128 (torch 2.9.0, torchvision 0.24.0)
+  Deps extras que o requirements.txt deles esqueceu (o app adiciona sozinho):
+    moviepy<2, addict, pycolmap, evo
+  Licença: CC BY-NC (uso não-comercial). Requer GPU NVIDIA e Git instalado.
+
+Conversor .splat4d (empacotar sequência 4D)
+  CLI:     pip  splats4d   (projeto adamraudonis/splats4D)
+
+DPVO (alinhamento de câmera alternativo, opcional) — experimental
+  Imagem Docker: ghcr.io/nyckm/dpvo:latest
+  Fork:          https://github.com/NyckM/DPVO
+  Requer Docker Desktop + GPU NVIDIA.
+
+Ferramentas base (instaladas sozinhas no 1º uso do pipeline)
+------------------------------------------------------------
+- ffmpeg ... https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip
+- COLMAP ... https://github.com/colmap/colmap/releases (build CUDA ou no-CUDA conforme a GPU)
+- uv ....... https://github.com/astral-sh/uv/releases
+- Brush .... treino 3DGS (baixado pelo app)
+
+Versões fixadas importantes
+---------------------------
+- torch / torchvision: 2.6.0 (compila o torchmcubes com C++17 e casa CPU<->cu124 com mesmo ABI)
+
+Como usar os .bat
+-----------------
+Tem DOIS jeitos de guardar/reinstalar. Escolha conforme o caso:
+
+A) MESMO PC (rápido) — backup_modelos.bat / instalar_modelos.bat
+   - backup_modelos.bat   -> cria BruxoSplat_modelos_backup.tar (um arquivo só).
+   - instalar_modelos.bat -> restaura tudo desse .tar, sem internet.
+   - Funciona no MESMO usuário do Windows em que foi criado (o ambiente Python
+     guarda caminhos absolutos). É o mais simples e rápido.
+
+B) OUTRO PC / PORTÁTIL — criar_pacote_offline.bat / instalar_offline.bat
+   - criar_pacote_offline.bat -> cria a pasta BruxoSplat_offline com o interpretador
+     Python, as bibliotecas já compiladas (inclui torchmcubes), ferramentas,
+     repositórios, checkpoint e pesos.
+   - instalar_offline.bat     -> em QUALQUER PC Windows 64-bit, sem internet, cria um
+     ambiente Python novo (caminhos corretos pra aquele PC) e coloca tudo no lugar.
+   - Rode o instalar_offline.bat de DENTRO da pasta BruxoSplat_offline.
+   - Requer o mesmo Python 3.11 / Windows 64-bit. É maior e mais lento que o (A),
+     mas roda em máquinas/usuários diferentes.
+
+Em último caso (se algum .bat falhar), sempre dá pra reinstalar pela aba IA do app
+com internet — enquanto as fontes lá em cima estiverem no ar.
