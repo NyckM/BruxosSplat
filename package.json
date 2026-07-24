@@ -1,0 +1,66 @@
+{
+  "name": "bruxosplat",
+  "productName": "BruxoSplat",
+  "version": "1.0.0",
+  "description": "Vídeo → 3D Gaussian Splatting no seu PC, com a sua GPU. Por Bruxos do VFX.",
+  "main": "main.js",
+  "author": "Bruxos do VFX",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "dependencies": {
+    "extract-zip": "^2.0.1"
+  },
+  "build": {
+    "appId": "com.bruxosdovfx.bruxosplat",
+    "productName": "BruxoSplat",
+    "files": [
+      "main.js",
+      "preload.js",
+      "pipeline.js",
+      "dpvo.js",
+      "downloader.js",
+      "envman.js",
+      "ui/**/*",
+      "models/**/*"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "BruxoSplat-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "BruxoSplat-Portable-${version}.${ext}"
+    },
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] },
+        { "target": "zip", "arch": ["arm64", "x64"] }
+      ],
+      "icon": "build/icon.icns",
+      "category": "public.app-category.graphics-design",
+      "artifactName": "BruxoSplat-${version}-${arch}.${ext}",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "identity": null
+    },
+    "dmg": {
+      "artifactName": "BruxoSplat-${version}-${arch}.${ext}"
+    }
+  }
+}
