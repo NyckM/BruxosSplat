@@ -1,23 +1,12 @@
 name: Build macOS (.dmg)
 
-# Roda numa máquina Mac de verdade do GitHub (gratuito em repositórios públicos).
-# Como usar:
-#   1) Suba este repositório no GitHub (com este arquivo em .github/workflows/build-mac.yml).
-#   2) Na aba "Actions" do repositório, escolha "Build macOS (.dmg)" → "Run workflow".
-#   3) Espere terminar (~10-15 min) e baixe o .dmg em "Artifacts", no final da execução.
-# Também roda sozinho sempre que você publicar uma tag de versão (ex: v0.1.0).
-"on":
+on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*.*.*'
-
-permissions:
-  contents: write  # necessário pro passo que anexa os arquivos numa Release
 
 jobs:
   build-mac:
     runs-on: macos-latest
+
     steps:
       - name: Baixar o código
         uses: actions/checkout@v4
@@ -26,6 +15,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
 
       - name: Instalar dependências
         run: npm install
@@ -33,26 +23,15 @@ jobs:
       - name: Gerar ícone (.icns)
         run: node make_icon.js
 
-     - name: Gerar o app do Mac (.dmg e .zip, Intel + Apple Silicon)
-  env:
-    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  run: npm run dist:mac
+      - name: Gerar o app do Mac (.dmg e .zip)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run dist:mac
 
-      - name: Publicar como artefato pra download
+      - name: Publicar como artefato
         uses: actions/upload-artifact@v4
         with:
           name: BruxoSplat-mac
           path: |
-            dist/*.dmg
-            dist/*.zip
-          if-no-files-found: error
-
-      # se o push foi de uma tag de versão (ex: v0.1.0), também anexa os arquivos
-      # direto numa Release do GitHub automaticamente
-      - name: Anexar numa Release (só quando a tag for de versão)
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
             dist/*.dmg
             dist/*.zip
