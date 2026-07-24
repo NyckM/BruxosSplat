@@ -33,8 +33,10 @@ jobs:
       - name: Gerar ícone (.icns)
         run: node make_icon.js
 
-      - name: Gerar o app do Mac (.dmg e .zip, Intel + Apple Silicon)
-        run: npm run dist:mac
+     - name: Gerar o app do Mac (.dmg e .zip, Intel + Apple Silicon)
+  env:
+    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  run: npm run dist:mac
 
       - name: Publicar como artefato pra download
         uses: actions/upload-artifact@v4
