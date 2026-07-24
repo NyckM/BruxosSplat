@@ -2,6 +2,8 @@
 
 **Vídeo → 3D Gaussian Splatting no seu PC, usando a sua GPU.** Gratuito e open source, por **Bruxos do VFX**.
 
+<img width="1581" height="1015" alt="image" src="https://github.com/user-attachments/assets/c2fea7f2-a94b-4f3d-9d69-bb45429d9b91" />
+
 Uma alternativa gratuita ao Postshot: escolha um vídeo, clique em *Iniciar Treino*, e o resultado abre direto no editor [3dGS_WebEDIT](https://github.com/NyckM/3dGS_WebEDIT) (efeitos, crop, animação de câmera, gravação de vídeo). Além do pipeline clássico de vídeo, a v1 traz modelos de IA para gerar splats a partir de **uma foto**, de **uma imagem 360°** e até **rostos em 4D** a partir de vídeo.
 
 ---
@@ -18,6 +20,7 @@ Uma alternativa gratuita ao Postshot: escolha um vídeo, clique em *Iniciar Trei
 | 4 | **3dGS_WebEDIT** | abre o `.ply` no editor embutido |
 
 - **Alinhamento de câmera COLMAP (padrão) ou DPVO** (experimental): DPVO é bem mais rápido em vídeos longos (roda via Docker + GPU NVIDIA), com calibração aproximada.
+<img width="1585" height="1015" alt="image" src="https://github.com/user-attachments/assets/4965aa7f-04b6-43df-9a68-f6bc4279c2a0" />
 
 **Modelos de IA** (aba IA — baixados sob demanda, cada um só na 1ª vez)
 
@@ -36,6 +39,9 @@ Uma alternativa gratuita ao Postshot: escolha um vídeo, clique em *Iniciar Trei
 - Abre a sequência inteira no **WebEDIT** como timeline (não só um frame).
 
 **Importação** de `.ply`, `.splat`, `.ksplat` e `.splat4d`.
+
+<img width="397" height="1097" alt="image" src="https://github.com/user-attachments/assets/bbf8acb3-be61-43eb-9fce-3cf4c19bc53e" />
+
 
 ---
 
@@ -116,6 +122,9 @@ Os arquivos em `dist/` (`BruxoSplat-Setup-1.0.0.exe`, `BruxoSplat-Portable-1.0.0
 - **Mac: "app está danificado"** → é o Gatekeeper, não corrupção. Botão direito → Abrir, ou `xattr -cr /Applications/BruxoSplat.app`.
 
 ---
+
+<img width="437" height="237" alt="image" src="https://github.com/user-attachments/assets/6072c8e3-3a3f-4c35-b0a3-6a8dad79de43" />
+
 
 ## Créditos
 
