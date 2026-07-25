@@ -1,153 +1,174 @@
-// dpvo.js — alinhamento de câmeras alternativo via DPVO (Deep Patch Visual Odometry),
-// rodando dentro do Docker image publicado pelo fork do usuário (ghcr.io/nyckm/dpvo).
-// Mais rápido que COLMAP em vídeos longos, mas calibração é aproximada (sem EXIF)
-// e a nuvem de pontos inicial é mais esparsa.
-const { spawn, execSync } = require('child_process');
+// dpvo.js — alinhamento alternativo DPVO direto, em venv uv isolado.
+// Não usa Docker: as extensões CUDA são instaladas como wheels pré-compiladas.
+const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-
-const DPVO_IMAGE = 'ghcr.io/nyckm/dpvo:latest';
+let processTracker = () => {};
+function setProcessTracker(tracker) { processTracker = typeof tracker === 'function' ? tracker : () => {}; }
 
 function run(exe, args, cwd, onLine) {
   return new Promise((resolve, reject) => {
-    const p = spawn(exe, args, { cwd, windowsHide: true });
+    // Sem isso, os prints do Python ficam no buffer quando o app captura o
+    // log; uma exceção parecia surgir “do nada” depois de vários minutos.
+    // No Windows o Process() do DPVO reinicia o interpretador. Força o
+    // checkout oficial antes de site-packages: o wheel dpvo-cuda fornece as
+    // extensões CUDA, mas também traz um pacote Python incompleto que não pode
+    // substituir os módulos do repositório oficial no processo filho.
+    const oldPythonPath = process.env.PYTHONPATH || '';
+    const p = spawn(exe, args, {
+      cwd, windowsHide: true,
+      env: { ...process.env, PYTHONUNBUFFERED: '1', PYTHONPATH: cwd + path.delimiter + oldPythonPath }
+    });
+    processTracker(p);
     const feed = d => d.toString().split(/\r?\n/).forEach(l => l.trim() && onLine(l.trim()));
-    p.stdout.on('data', feed);
-    p.stderr.on('data', feed);
-    p.on('error', reject);
-    p.on('close', code => code === 0 ? resolve() : reject(new Error(`${path.basename(exe)} saiu com código ${code}`)));
-  });
-}
-
-/** Confere se o Docker está instalado e o daemon está rodando. */
-function ensureDocker() {
-  try {
-    execSync('docker info', { stdio: 'ignore' });
-    return true;
-  } catch {
-    throw new Error('Docker não encontrado ou não está rodando. Instale o Docker Desktop e garanta que ele está aberto antes de usar o alinhamento DPVO.');
-  }
-}
-
-/** Puxa a imagem DPVO do GHCR se ainda não existir localmente. */
-async function ensureDpvoImage(log) {
-  let exists = false;
-  try {
-    const out = execSync(`docker images -q ${DPVO_IMAGE}`).toString().trim();
-    exists = !!out;
-  } catch {}
-  if (exists) { log(`Imagem ${DPVO_IMAGE} já disponível localmente.`); return; }
-  log(`Baixando imagem Docker ${DPVO_IMAGE} (pode levar alguns minutos na primeira vez)…`);
-  await run('docker', ['pull', DPVO_IMAGE], null, log);
-}
-
-/** Lê a resolução do vídeo (WxH) via ffmpeg -i (parseando o stderr). */
-function getVideoResolution(ffmpegPath, videoPath) {
-  return new Promise((resolve, reject) => {
-    const p = spawn(ffmpegPath, ['-i', videoPath], { windowsHide: true });
-    let out = '';
-    p.stderr.on('data', d => out += d.toString());
-    p.stdout.on('data', d => out += d.toString());
-    p.on('error', reject);
-    p.on('close', () => {
-      const m = out.match(/,\s*(\d{2,5})x(\d{2,5})(?:\s|,|\[)/);
-      if (!m) return reject(new Error('Não foi possível detectar a resolução do vídeo.'));
-      resolve({ width: parseInt(m[1], 10), height: parseInt(m[2], 10) });
+    p.stdout.on('data', feed); p.stderr.on('data', feed);
+    p.on('error', err => { processTracker(null, p); reject(err); });
+    // O demo oficial cria um Process() leitor. No Windows esse filho pode
+    // herdar stdout/stderr; então o evento `close` do Node nunca chega caso
+    // o processo principal falhe. `exit` acompanha o processo que lançamos
+    // e evita deixar a interface eternamente em “Alinhando câmeras”.
+    let settled = false;
+    p.on('exit', code => {
+      if (settled) return;
+      settled = true;
+      processTracker(null, p);
+      code === 0 ? resolve() : reject(new Error(`${path.basename(exe)} saiu com código ${code}`));
     });
   });
 }
 
-/** Heurística de calibração pinhole (sem EXIF): assume FOV horizontal de ~60°. */
-function generateCalib(width, height, fovDeg = 60) {
-  const fovRad = fovDeg * Math.PI / 180;
-  const fx = width / (2 * Math.tan(fovRad / 2));
-  const fy = fx;
-  const cx = width / 2;
-  const cy = height / 2;
-  return { fx, fy, cx, cy };
+function getVideoResolution(ffmpegPath, videoPath) {
+  return new Promise((resolve, reject) => {
+    const p = spawn(ffmpegPath, ['-i', videoPath], { windowsHide: true }); let out = '';
+    p.stdout.on('data', d => out += d); p.stderr.on('data', d => out += d);
+    p.on('error', reject); p.on('close', () => {
+      const m = out.match(/,\s*(\d{2,5})x(\d{2,5})(?:\s|,|\[)/);
+      if (!m) return reject(new Error('Não foi possível detectar a resolução do vídeo.'));
+      resolve({ width: +m[1], height: +m[2] });
+    });
+  });
 }
 
-/**
- * Etapa 1+2 alternativa (via DPVO): frames + alinhamento de câmeras.
- * opts: { videos:[{path,start,end,interval}], workDir, maxSize }
- * Suporta apenas um vídeo por vez (DPVO estima uma única trajetória de câmera contínua).
- */
+function generateCalib(width, height, fovDeg = 60) {
+  const fx = width / (2 * Math.tan((fovDeg * Math.PI / 180) / 2));
+  return { fx, fy: fx, cx: width / 2, cy: height / 2 };
+}
+
+function scaledSize(width, height, maxSize) {
+  const s = Math.min(1, maxSize / Math.max(width, height));
+  // A rede do DPVO faz downsampling sucessivo. Dimensões somente pares não
+  // bastam: por exemplo 960×410 vira uma feature map com 103 linhas, enquanto
+  // o buffer interno foi alocado para 102. Alinhar ambos os lados a 8 evita
+  // esse erro e também o encerramento nativo que o processo leitor mascarava.
+  const aligned = n => Math.max(8, Math.floor(n / 8) * 8);
+  return { width: aligned(width * s), height: aligned(height * s) };
+}
+
+function findColmapModel(dir) {
+  const names = new Set(['cameras.txt', 'cameras.bin']);
+  const walk = d => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) { const r = walk(p); if (r) return r; }
+      else if (names.has(e.name) && (fs.existsSync(path.join(d, 'images.txt')) || fs.existsSync(path.join(d, 'images.bin')))) return d;
+    }
+    return null;
+  };
+  return walk(dir);
+}
+
+// O exportador CEB salva as poses, mas omite o nome da imagem e escreve uma
+// trilha fictícia nos pontos. COLMAP, Brush e pycolmap exigem o formato texto
+// completo: pose + nome da imagem + uma linha (vazia, neste caso) de pontos 2D.
+function normalizeDpvoColmapModel(modelDir, imagesDir) {
+  const names = fs.readdirSync(imagesDir).filter(f => /\.jpe?g$/i.test(f)).sort();
+  const imageFile = path.join(modelDir, 'images.txt');
+  const poseLines = fs.readFileSync(imageFile, 'utf8').split(/\r?\n/)
+    .map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+  if (!poseLines.length) throw new Error('DPVO não exportou poses para o modelo COLMAP.');
+  if (poseLines.length > names.length) throw new Error(`DPVO exportou ${poseLines.length} poses para apenas ${names.length} frames.`);
+  const normalized = poseLines.map((line, index) => {
+    const fields = line.split(/\s+/);
+    if (fields.length < 9) throw new Error(`Pose DPVO inválida na linha ${index + 1}.`);
+    return `${fields.slice(0, 9).join(' ')} ${names[index]}\n\n`;
+  }).join('');
+  fs.writeFileSync(imageFile, '# Image list with two lines of data per image:\n# IMAGE_ID QW QX QY QZ TX TY TZ CAMERA_ID NAME\n# POINTS2D[] as (X Y POINT3D_ID)\n' + normalized);
+
+  const pointsFile = path.join(modelDir, 'points3D.txt');
+  if (fs.existsSync(pointsFile)) {
+    const points = fs.readFileSync(pointsFile, 'utf8').split(/\r?\n/).map(line => {
+      const f = line.trim().split(/\s+/);
+      return line.trim() && f.length >= 8 ? f.slice(0, 8).join(' ') : '';
+    }).filter(Boolean).join('\n');
+    fs.writeFileSync(pointsFile, '# 3D point list\n# POINT3D_ID X Y Z R G B ERROR TRACK[]\n' + points + (points ? '\n' : ''));
+  }
+  const camerasFile = path.join(modelDir, 'cameras.txt');
+  if (fs.existsSync(camerasFile)) {
+    const cameras = fs.readFileSync(camerasFile, 'utf8').trim();
+    fs.writeFileSync(camerasFile, '# Camera list\n# CAMERA_ID MODEL WIDTH HEIGHT PARAMS[]\n' + cameras + '\n');
+  }
+  return poseLines.length;
+}
+
 async function prepareDatasetDPVO(tools, opts, report, onPreview) {
+  if (!tools.dpvoOutputDir) throw new Error('Pacote portátil DPVO não foi encontrado. Instale-o em external_engines/DPVO_CEB.');
+  if (!tools.dpvoPython || !tools.dpvoRepo) throw new Error('Ambiente DPVO direto não foi preparado.');
   if (!opts.videos || !opts.videos.length) throw new Error('Nenhum vídeo selecionado.');
-  if (opts.videos.length > 1) report('colmap', '⚠️ DPVO processa só o primeiro vídeo da lista (estima uma trajetória contínua de câmera).');
+  if (opts.videos.length > 1) report('colmap', '⚠️ DPVO processa apenas o primeiro vídeo (uma trajetória contínua).');
   const video = opts.videos[0];
-  const work = opts.workDir;
-  const imagesDir = path.join(work, 'images');
-  const sparseDir = path.join(work, 'sparse');
-  const dpvoOutDir = path.join(work, 'dpvo_out');
+  if (video.projection === 'equirect') throw new Error('DPVO direto ainda não suporta vídeo 360. Use COLMAP + modo equiretangular.');
+  const work = opts.workDir, imagesDir = path.join(work, 'images'), sparse0 = path.join(work, 'sparse', '0');
+  // O demo CEB sempre grava em <repo>/output/<nome>. `--name` não aceita
+  // caminho absoluto, pois o próprio DPVO prefixa "output/".
+  const runName = `bruxosplat_${Date.now()}`;
+  const dpvoOut = path.join(tools.dpvoOutputDir, runName);
   fs.rmSync(work, { recursive: true, force: true });
-  fs.mkdirSync(imagesDir, { recursive: true });
-  fs.mkdirSync(sparseDir, { recursive: true });
-  fs.mkdirSync(dpvoOutDir, { recursive: true });
+  fs.mkdirSync(imagesDir, { recursive: true }); fs.mkdirSync(dpvoOut, { recursive: true });
 
-  report('colmap', 'Verificando Docker…');
-  ensureDocker();
-  await ensureDpvoImage(l => report('colmap', l));
-
-  report('colmap', 'Detectando resolução do vídeo…');
-  const { width, height } = await getVideoResolution(tools.ffmpeg, video.path);
-  const calib = generateCalib(width, height);
+  report('colmap', 'Detectando resolução e calibração aproximada…');
+  const original = await getVideoResolution(tools.ffmpeg, video.path);
+  // DPVO recebe seu próprio limite porque custo de pose cresce por pixel.
+  const requestedMax = Number(opts.dpvoMaxSize) || Math.max(original.width, original.height);
+  const size = scaledSize(original.width, original.height, requestedMax);
+  if (Math.max(original.width, original.height) > requestedMax) {
+    report('frames', `DPVO: frames redimensionados para ${size.width}×${size.height} para acelerar a estimativa de poses.`);
+  }
+  const calib = generateCalib(size.width, size.height);
   const calibPath = path.join(work, 'calib.txt');
   fs.writeFileSync(calibPath, `${calib.fx} ${calib.fy} ${calib.cx} ${calib.cy}\n`);
-  report('colmap', `Calibração estimada (sem EXIF): fx=${calib.fx.toFixed(1)} fy=${calib.fy.toFixed(1)} cx=${calib.cx.toFixed(1)} cy=${calib.cy.toFixed(1)}`);
 
-  // Frames para o treino (Brush precisa das imagens correspondentes às poses do DPVO)
-  report('frames', 'Extraindo frames do vídeo…');
-  const args = [];
-  if (video.start) args.push('-ss', video.start);
-  if (video.end) args.push('-to', video.end);
-  args.push('-i', video.path,
-    '-vf', `scale='min(${opts.maxSize},iw)':-2`,
-    '-q:v', '2',
-    path.join(imagesDir, '%06d.jpg'));
+  report('frames', 'Extraindo frames para DPVO…');
+  const args = []; if (video.start) args.push('-ss', video.start); if (video.end) args.push('-to', video.end);
+  const fps = Math.max(0.1, parseFloat(video.fps) || (video.interval ? 1 / parseFloat(video.interval) : 2));
+  args.push('-i', video.path, '-vf', `fps=${fps},scale=${size.width}:${size.height}`, '-q:v', '2', path.join(imagesDir, '%06d.jpg'));
   await run(tools.ffmpeg, args, work, l => report('frames', l));
-  const nFrames = fs.readdirSync(imagesDir).length;
-  if (nFrames < 5) throw new Error('Poucos frames extraídos do vídeo (' + nFrames + ').');
+  const nFrames = fs.readdirSync(imagesDir).filter(f => /\.jpe?g$/i.test(f)).length;
+  if (nFrames < 5) throw new Error(`Poucos frames extraídos do vídeo (${nFrames}).`);
   report('frames', `${nFrames} frames extraídos.`);
 
-  // Docker run: DPVO lê o vídeo diretamente e escreve saída COLMAP em /app/outputs/run/colmap
-  report('colmap', 'Alinhando câmeras (DPVO)…');
-  const videoAbs = path.resolve(video.path);
-  const dockerArgs = [
-    'run', '--rm', '--gpus', 'all', '--ipc=host',
-    '-v', `${videoAbs}:/data/input.mp4:ro`,
-    '-v', `${calibPath}:/app/calib/custom.txt:ro`,
-    '-v', `${dpvoOutDir}:/app/outputs`,
-    DPVO_IMAGE,
-    'python', 'run.py',
-    '--imagedir=/data/input.mp4',
-    '--calib=calib/custom.txt',
-    '--stride', '2',
-    '--name', 'run',
-    '--save_colmap'
-  ];
-  await run('docker', dockerArgs, work, l => report('colmap', l));
-
-  const dpvoColmapDir = path.join(dpvoOutDir, 'run', 'colmap');
-  if (!fs.existsSync(dpvoColmapDir)) throw new Error('DPVO não gerou saída COLMAP (outputs/run/colmap). Confira o log acima.');
-  const sparse0 = path.join(sparseDir, '0');
+  report('colmap', 'Alinhando câmeras (DPVO direto / CUDA)…');
+  await run(tools.dpvoPython, ['demo.py', '--imagedir', imagesDir, '--calib', calibPath,
+    '--network', 'dpvo.pth', '--stride', '2', '--name', runName, '--save_colmap', '--save_ply'], tools.dpvoRepo, l => report('colmap', l));
+  const model = findColmapModel(dpvoOut);
+  if (!model) throw new Error('DPVO terminou sem modelo COLMAP. Confira o log acima.');
+  const poseCount = normalizeDpvoColmapModel(model, imagesDir);
   fs.mkdirSync(sparse0, { recursive: true });
-  for (const f of fs.readdirSync(dpvoColmapDir)) {
-    fs.copyFileSync(path.join(dpvoColmapDir, f), path.join(sparse0, f));
+  for (const f of fs.readdirSync(model)) fs.copyFileSync(path.join(model, f), path.join(sparse0, f));
+  report('colmap', `DPVO: ${poseCount}/${nFrames} poses associadas aos frames para o treino.`);
+  report('colmap', 'Câmeras alinhadas via DPVO direto (sem Docker).');
+
+  // O DPVO já exporta um PLY e um modelo COLMAP em texto. Usá-los
+  // diretamente evita que o model_converter rejeite pontos sem tracks,
+  // que são válidos para visualização mas não para nova triangulação.
+  const nativePly = path.join(tools.dpvoOutputDir, `${runName}.ply`);
+  const pointsPly = path.join(work, 'points.ply');
+  if (fs.existsSync(nativePly)) fs.copyFileSync(nativePly, pointsPly);
+  if (onPreview && fs.existsSync(pointsPly)) {
+    onPreview({ pointsPly, imagesTxt: path.join(sparse0, 'images.txt') });
+  } else {
+    report('colmap', 'Preview indisponível: o DPVO não gerou o arquivo PLY.');
   }
-  report('colmap', 'Câmeras alinhadas via DPVO.');
-
-  // Preview: nuvem esparsa + poses (reaproveita o COLMAP já baixado só pra conversão de formato)
-  try {
-    const pointsPly = path.join(work, 'points.ply');
-    const txtDir = path.join(work, 'sparse_txt');
-    fs.mkdirSync(txtDir, { recursive: true });
-    await run(tools.colmap, ['model_converter', '--input_path', sparse0, '--output_path', pointsPly, '--output_type', 'PLY'], work, () => {});
-    await run(tools.colmap, ['model_converter', '--input_path', sparse0, '--output_path', txtDir, '--output_type', 'TXT'], work, () => {});
-    if (onPreview) onPreview({ pointsPly, imagesTxt: path.join(txtDir, 'images.txt') });
-  } catch (e) { report('colmap', 'Preview indisponível: ' + e.message); }
-
   return work;
 }
 
-module.exports = { prepareDatasetDPVO, ensureDocker, ensureDpvoImage, generateCalib, getVideoResolution, DPVO_IMAGE };
+module.exports = { prepareDatasetDPVO, generateCalib, getVideoResolution, normalizeDpvoColmapModel, setProcessTracker };

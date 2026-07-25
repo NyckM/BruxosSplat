@@ -3,7 +3,11 @@ contextBridge.exposeInMainWorld('bruxo', {
   pickVideo: () => ipcRenderer.invoke('pick-video'),
   pickOutDir: () => ipcRenderer.invoke('pick-outdir'),
   align: opts => ipcRenderer.invoke('align', opts),
+  openColmap: () => ipcRenderer.invoke('open-colmap'),
+  saveProject: () => ipcRenderer.invoke('save-project'),
+  openProject: () => ipcRenderer.invoke('open-project'),
   train: opts => ipcRenderer.invoke('train', opts),
+  abortWork: () => ipcRenderer.invoke('abort-work'),
   openFolder: p => ipcRenderer.invoke('open-folder', p),
   savePly: (buf, name) => ipcRenderer.invoke('save-ply', buf, name),
   modelList: () => ipcRenderer.invoke('model-list'),
@@ -26,5 +30,7 @@ contextBridge.exposeInMainWorld('bruxo', {
   onTrainSnap: cb => ipcRenderer.on('trainsnap', (_e, d) => cb(d)),
   onAligned: cb => ipcRenderer.on('aligned', (_e, d) => cb(d)),
   onDone: cb => ipcRenderer.on('done', (_e, d) => cb(d)),
-  onError: cb => ipcRenderer.on('error', (_e, d) => cb(d))
+  onError: cb => ipcRenderer.on('error', (_e, d) => cb(d)),
+  onCancelled: cb => ipcRenderer.on('cancelled', () => cb()),
+  onProjectOpened: cb => ipcRenderer.on('project-opened', (_e, d) => cb(d))
 });

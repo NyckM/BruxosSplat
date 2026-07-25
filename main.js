@@ -1,16 +1,102 @@
 // main.js — processo principal do Electron
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeImage } = require('electron');
+const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
-const { ensureTools } = require('./downloader');
-const { installModel, runModel, ensureSplat4dCli, ensureConvertDeps, MODELS } = require('./envman');
-const { prepareDataset, trainSplat } = require('./pipeline');
-const { prepareDatasetDPVO } = require('./dpvo');
+const { ensureTools, hasNvidiaGpu } = require('./downloader');
+const { installModel, runModel, ensureSplat4dCli, ensureConvertDeps, ensurePpispTrainer, ensureDpvoDirect, ensureMast3r, ensure3dgrut, MODELS } = require('./envman');
+const { prepareDataset, prepareDatasetMast3r, prepareDatasetMegaSam, trainSplat, trainPpisp, train3dgrut, setProcessTracker: setPipelineProcessTracker } = require('./pipeline');
+const { prepareDatasetDPVO, setProcessTracker: setDpvoProcessTracker } = require('./dpvo');
+const modelScript = name => {
+  const unpacked = process.resourcesPath && path.join(process.resourcesPath, 'app.asar.unpacked', 'models', name);
+  return unpacked && fs.existsSync(unpacked) ? unpacked : path.join(__dirname, 'models', name);
+};
 
 let win, serverPort = 0, lastPly = null, previewPly = null, previewCams = null, preparedDir = null, trainPly = null;
+// Poses não pertencem ao formato PLY: ficam num sidecar JSON versionado.
+let previewCameraPath = null, lastCameraPath = null;
+const activeChildren = new Set();
+let abortRequested = false;
+const trackChild = (child, removed) => {
+  if (removed) activeChildren.delete(removed);
+  else if (child) activeChildren.add(child);
+};
+setPipelineProcessTracker(trackChild);
+setDpvoProcessTracker(trackChild);
+
+function abortActiveWork() {
+  abortRequested = true;
+  for (const child of [...activeChildren]) {
+    try {
+      // Python/CUDA e ffmpeg frequentemente criam filhos; /T encerra a árvore.
+      if (process.platform === 'win32' && child.pid) spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+      else child.kill('SIGTERM');
+    } catch {}
+  }
+}
 let lastPlyFormat = 'ply'; // 'ply' | 'splat' | 'ksplat' — formato real do arquivo carregado (server sempre serve como /scene.ply)
 let seq4d = []; // sequência 4D atual: [{ path, format }], usada pela timeline
+
+// O alinhamento COLMAP é a etapa mais demorada. Guarda somente a referência do
+// último projeto válido para que uma reinicialização (por exemplo após instalar
+// um backend) não obrigue o usuário a extrair frames e alinhar tudo de novo.
+function preparedStateFile() { return path.join(app.getPath('userData'), 'last_prepared_project.json'); }
+function savePreparedProject(dir) {
+  try { fs.writeFileSync(preparedStateFile(), JSON.stringify({ workDir: dir, savedAt: new Date().toISOString() })); } catch {}
+}
+function loadPreparedProject() {
+  try {
+    const { workDir } = JSON.parse(fs.readFileSync(preparedStateFile(), 'utf8'));
+    if (workDir && fs.existsSync(path.join(workDir, 'images')) && fs.existsSync(path.join(workDir, 'sparse', '0'))) return workDir;
+  } catch {}
+  return null;
+}
+function projectManifest(workDir, resultPly = lastPly, resultCameraPath = lastCameraPath) {
+  return {
+    schema: 'bruxosplat-project/v1', savedAt: new Date().toISOString(), workDir,
+    pointsPly: path.join(workDir, 'points.ply'),
+    cameraPath: path.join(workDir, 'camera_path.json'),
+    imagesTxt: path.join(workDir, 'sparse_txt', 'images.txt'),
+    resultPly: resultPly && fs.existsSync(resultPly) ? resultPly : null,
+    resultCameraPath: resultCameraPath && fs.existsSync(resultCameraPath) ? resultCameraPath : null
+  };
+}
+function saveProjectManifest(workDir, resultPly, resultCameraPath) {
+  if (!workDir) return null;
+  const file = path.join(workDir, 'BruxoSplat.project.json');
+  try { fs.writeFileSync(file, JSON.stringify(projectManifest(workDir, resultPly, resultCameraPath), null, 2), 'utf8'); return file; } catch { return null; }
+}
+function parseCameraPathFile(file) {
+  try {
+    return (JSON.parse(fs.readFileSync(file, 'utf8')).frames || []).map(f => ({ name: f.image || '', pos: f.position || f.pos, dir: f.forward || f.dir, up: f.up }))
+      .filter(f => Array.isArray(f.pos) && Array.isArray(f.dir));
+  } catch { return []; }
+}
+
+// O zip oficial do COLMAP no Windows muda a posição dos plugins Qt entre
+// versões. O comando de reconstrução não precisa deles, mas o GUI precisa de
+// qwindows.dll; sem esta variável o Qt mostra "no Qt platform plugin".
+function colmapGuiLaunchOptions(colmapExe) {
+  const bin = path.dirname(colmapExe);
+  const root = path.dirname(bin);
+  const platformDirs = [
+    path.join(bin, 'plugins', 'platforms'),
+    path.join(root, 'plugins', 'platforms'),
+    path.join(root, 'lib', 'Qt6', 'plugins', 'platforms'),
+    path.join(root, 'lib', 'qt6', 'plugins', 'platforms'),
+    path.join(root, 'lib', 'plugins', 'platforms')
+  ];
+  const platforms = platformDirs.find(d => fs.existsSync(path.join(d, 'qwindows.dll')));
+  const libDirs = [bin, root, path.join(root, 'lib'), path.join(root, 'lib', 'Qt6', 'bin')]
+    .filter(d => fs.existsSync(d));
+  const env = { ...process.env, PATH: [...libDirs, process.env.PATH || ''].join(path.delimiter) };
+  if (platforms) {
+    env.QT_QPA_PLATFORM_PLUGIN_PATH = platforms;
+    env.QT_PLUGIN_PATH = path.dirname(platforms);
+  }
+  return { windowsHide: false, detached: true, stdio: 'ignore', cwd: bin, env, foundQtPlugin: Boolean(platforms) };
+}
 
 // ordena "frame_2.ply" antes de "frame_10.ply" (ordem numérica, não alfabética)
 function naturalSort(a, b) {
@@ -55,7 +141,17 @@ function startServer() {
         // sequência 4D inteira por link (o WebEDIT do repo só sabe abrir 1 arquivo via ?url=).
         if (path.basename(file).toLowerCase() === 'index.html') {
           let html = fs.readFileSync(file, 'utf8');
-          const seqInject = "if (params.has('seq')) {\n"
+          const cameraInject = "if (params.has('camera')) {\n"
+            + "  fetch(params.get('camera')).then(r => { if (!r.ok) throw new Error('camera path not found'); return r.json(); }).then(data => {\n"
+            + "    const frames = data.frames || []; if (frames.length < 2) return;\n"
+            + "    const isEn=(window.bxLang==='en'||navigator.language.startsWith('en')), idleLabel=isEn?'Virtual camera':'Camera virtual', stopLabel=isEn?'Stop virtual camera':'Parar camera virtual'; const btn = document.createElement('button'); btn.textContent = idleLabel; btn.title = isEn?'Play the camera path saved by BruxoSplat':'Tocar trajeto salvo pelo BruxoSplat'; btn.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:80;background:#17121f;color:#d9c6ff;border:1px solid #8b5cf6;border-radius:9px;padding:9px 12px;font:600 13px system-ui;cursor:pointer;box-shadow:0 4px 18px #0008'; document.body.appendChild(btn);\n"
+            + "    let playing=false, started=0, raf=0; const v3=a=>new THREE.Vector3(a[0],-a[1],a[2]);\n"
+            + "    const stop=()=>{ playing=false; cancelAnimationFrame(raf); btn.textContent=idleLabel; if(viewer&&viewer.controls) viewer.controls.enabled=true; };\n"
+            + "    const tick=now=>{ if(!playing)return; const duration=Math.max(2200,frames.length*80),u=Math.min(1,(now-started)/duration),x=u*(frames.length-1),ai=Math.floor(x),bi=Math.min(frames.length-1,Math.ceil(x)),t=x-ai,a=frames[ai],b=frames[bi]; if(viewer&&viewer.camera){const pos=v3(a.position||a.pos).lerp(v3(b.position||b.pos),t),dir=v3(a.forward||a.dir).lerp(v3(b.forward||b.dir),t).normalize(),up=v3(a.up||[0,-1,0]).lerp(v3(b.up||[0,-1,0]),t).normalize(); viewer.camera.position.copy(pos); viewer.camera.up.copy(up); if(viewer.controls){viewer.controls.target.copy(pos.clone().add(dir));viewer.controls.update();}else viewer.camera.lookAt(pos.clone().add(dir));} if(u>=1)stop();else raf=requestAnimationFrame(tick);};\n"
+            + "    btn.onclick=()=>{if(playing)return stop();if(!viewer||!viewer.camera)return;playing=true;started=performance.now();btn.textContent=stopLabel;if(viewer.controls)viewer.controls.enabled=false;raf=requestAnimationFrame(tick);};\n"
+            + "  }).catch(e=>console.warn('BruxoSplat camera path:',e));\n"
+            + "}\n";
+          const seqInject = cameraInject + "if (params.has('seq')) {\n"
             + "  const _urls = params.get('seq').split(',').filter(Boolean);\n"
             + "  const _fmts = (params.get('fmt') || '').split(',');\n"
             + "  Promise.all(_urls.map((u, i) => fetch(u).then(r => r.arrayBuffer()).then(b => new File([b], 'frame_' + String(i).padStart(5,'0') + '.' + (_fmts[i] || 'ply'))))).then(fl => loadSequence(fl)).catch(e => showError('Erro na sequência: ' + e));\n"
@@ -78,6 +174,12 @@ function startServer() {
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify(previewCams));
+    } else if (req.url.startsWith('/camera-path.json') && (lastCameraPath || previewCameraPath)) {
+      const cameraFile = lastCameraPath || previewCameraPath;
+      if (!fs.existsSync(cameraFile)) { res.statusCode = 404; res.end(); return; }
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      fs.createReadStream(cameraFile).pipe(res);
     } else if (req.url.startsWith('/seq4d/')) {
       const i = parseInt(req.url.slice('/seq4d/'.length).split('?')[0], 10);
       const frame = seq4d[i];
@@ -261,6 +363,7 @@ ipcMain.handle('set-lang', (_e, lang) => {
 });
 
 app.whenReady().then(() => {
+  preparedDir = loadPreparedProject();
   startServer();
   createWindow();
   webEditReady = ensureWebEdit(l => send('status', { stage: 'setup', line: l }));
@@ -300,60 +403,220 @@ function nextSplatName(dir) {
 function sendPreview() {
   send('preview', {
     points: `http://127.0.0.1:${serverPort}/points.ply`,
-    cameras: `http://127.0.0.1:${serverPort}/cameras.json`
+    cameras: `http://127.0.0.1:${serverPort}/cameras.json`,
+    cameraPath: `http://127.0.0.1:${serverPort}/camera-path.json`
   });
 }
 
 async function doAlign(opts) {
   const tools = await getTools();
+  if (opts.alignMethod === 'dpvo') {
+    if (!hasNvidiaGpu()) throw new Error('DPVO requer uma GPU NVIDIA/CUDA. Use COLMAP neste computador.');
+    const portableRoot = path.join(app.getPath('userData'), 'external_engines', 'DPVO_CEB');
+    const py = path.join(portableRoot, 'python-3.11.9-embed-amd64', 'python.exe');
+    const repoDir = path.join(portableRoot, 'DPVO');
+    const outputDir = path.join(repoDir, 'output');
+    if (!fs.existsSync(py) || !fs.existsSync(path.join(repoDir, 'demo.py')) || !fs.existsSync(path.join(repoDir, 'dpvo.pth'))) {
+      throw new Error('O pacote portátil DPVO CEB não foi encontrado. Instale-o em %APPDATA%\\BruxoSplat\\external_engines\\DPVO_CEB.');
+    }
+    tools.dpvoPython = py;
+    tools.dpvoRepo = repoDir;
+    tools.dpvoOutputDir = outputDir;
+  }
+  if (opts.alignMethod === 'mast3r') {
+    if (!hasNvidiaGpu()) throw new Error('MASt3R requer uma GPU NVIDIA com driver CUDA disponível. Use COLMAP neste computador.');
+    if ((opts.videos || []).some(v => v.projection === 'equirect')) throw new Error('MASt3R ainda não suporta vídeo 360/equiretangular neste app. Use COLMAP + modo equiretangular.');
+    send('status', { stage: 'setup', line: 'Preparando ambiente isolado MASt3R (experimental, uso não comercial*)…' });
+    const mast3r = await ensureMast3r(l => send('status', { stage: 'setup', line: l }));
+    tools.mast3rPython = mast3r.py;
+    tools.mast3rRepo = mast3r.repoDir;
+  }
+  if (opts.alignMethod === 'megasam') {
+    if (!hasNvidiaGpu()) throw new Error('MegaSam requer GPU NVIDIA/CUDA. Use COLMAP neste computador.');
+    if ((opts.videos || []).some(v => v.projection === 'equirect')) throw new Error('MegaSam ainda não suporta vídeo 360/equiretangular neste app. Use COLMAP + modo equiretangular.');
+    const portableRoot = path.join(app.getPath('userData'), 'external_engines', 'MegaSam_CEB');
+    const py = path.join(portableRoot, 'python-3.10.11-embed-amd64', 'python.exe');
+    const repoDir = path.join(portableRoot, 'mega-sam');
+    if (!fs.existsSync(py) || !fs.existsSync(path.join(repoDir, 'run_pipeline.py')))
+      throw new Error('MegaSam portátil não encontrado. Instale/importe o pacote local do MegaSam antes de usar este modo.');
+    send('status', { stage: 'setup', line: 'Usando MegaSam portátil local (ambiente isolado)…' });
+    tools.megasamPython = py;
+    tools.megasamRepo = repoDir;
+  }
   const workDir = path.join(app.getPath('userData'), 'projects', 'proj_' + Date.now());
-  const prepare = opts.alignMethod === 'dpvo' ? prepareDatasetDPVO : prepareDataset;
+  const prepare = opts.alignMethod === 'dpvo' ? prepareDatasetDPVO : opts.alignMethod === 'mast3r' ? prepareDatasetMast3r : opts.alignMethod === 'megasam' ? prepareDatasetMegaSam : prepareDataset;
   await prepare(tools, { ...opts, workDir },
     (stage, line) => send('status', { stage, line }),
     prev => {
       previewPly = prev.pointsPly;
       previewCams = parseImagesTxt(prev.imagesTxt);
+      previewCameraPath = saveCameraPath(workDir, prev.imagesTxt, opts.alignMethod, opts.videos);
+      lastCameraPath = previewCameraPath;
       try {
         const nImgs = fs.readdirSync(path.join(workDir, 'images')).length;
         const pct = Math.round(100 * previewCams.length / nImgs);
         send('status', { stage: 'colmap', line: `Câmeras alinhadas: ${previewCams.length}/${nImgs} (${pct}%)` });
         if (pct < 70) send('status', { stage: 'colmap',
-          line: `⚠️ Só ${pct}% das imagens foram alinhadas — a qualidade vai sofrer. Diminua o intervalo (ex.: 0.25s) para mais sobreposição, ou grave mais devagar.` });
+          line: `⚠️ Só ${pct}% das imagens foram alinhadas — a qualidade vai sofrer. Aumente o FPS (ex.: 4) para mais sobreposição, ou grave mais devagar.` });
       } catch {}
       sendPreview();
     });
   preparedDir = workDir;
+  savePreparedProject(workDir);
+  saveProjectManifest(workDir);
   return tools;
 }
 
 ipcMain.handle('align', async (_e, opts) => {
+  abortRequested = false;
   try {
     await doAlign(opts);
     send('aligned', {});
     return { ok: true };
-  } catch (err) { send('error', { message: err.message }); return { ok: false }; }
+  } catch (err) {
+    if (abortRequested) { abortRequested = false; send('cancelled', {}); return { ok: false, cancelled: true }; }
+    send('error', { message: err.message }); return { ok: false };
+  }
+});
+
+// Abre o banco e as imagens do último alinhamento no GUI do COLMAP. O modelo
+// esparso continua em sparse/0 para importar no menu File > Import Model.
+ipcMain.handle('open-colmap', async () => {
+  try {
+    // Se o app foi reiniciado antes da persistência existir, deixa o usuário
+    // apontar para a pasta proj_<data> já criada pelo alinhamento anterior.
+    if (!preparedDir) {
+      const picked = await dialog.showOpenDialog(win, {
+        title: 'Escolha o projeto COLMAP (pasta proj_...)',
+        defaultPath: path.join(app.getPath('userData'), 'projects'),
+        properties: ['openDirectory']
+      });
+      if (picked.canceled) return { ok: false };
+      preparedDir = picked.filePaths[0];
+    }
+    const db = path.join(preparedDir, 'database.db');
+    const images = path.join(preparedDir, 'images');
+    const model = path.join(preparedDir, 'sparse', '0');
+    if (!fs.existsSync(db) || !fs.existsSync(images) || !fs.existsSync(model)) {
+      preparedDir = null;
+      throw new Error('Essa não parece ser uma pasta de projeto COLMAP. Escolha a pasta proj_... que contém database.db, images e sparse\\0.');
+    }
+    savePreparedProject(preparedDir);
+    const tools = await getTools();
+    const guiOptions = colmapGuiLaunchOptions(tools.colmap);
+    const proc = spawn(tools.colmap, ['gui', '--database_path', db, '--image_path', images], guiOptions);
+    proc.unref();
+    send('status', { stage: 'colmap', line: guiOptions.foundQtPlugin
+      ? 'COLMAP aberto. Para ver a nuvem: File > Import Model > selecione sparse\\0.'
+      : 'COLMAP iniciado. Se ainda houver erro Qt, rode a atualização do BruxoSplat para localizar os plugins do pacote.' });
+    return { ok: true, model };
+  } catch (err) { send('error', { message: err.message }); return { ok: false, error: err.message }; }
+});
+
+ipcMain.handle('save-project', async () => {
+  try {
+    if (!preparedDir || !fs.existsSync(preparedDir)) throw new Error('Ainda não há um projeto alinhado para salvar.');
+    const internal = saveProjectManifest(preparedDir, lastPly, lastCameraPath);
+    if (!internal) throw new Error('Não foi possível gravar o manifesto do projeto.');
+    const picked = await dialog.showSaveDialog(win, {
+      title: 'Salvar projeto BruxoSplat', defaultPath: path.join(app.getPath('documents'), 'BruxoSplat', path.basename(preparedDir) + '.bvfx'),
+      filters: [{ name: 'Projeto Bruxos do VFX', extensions: ['bvfx'] }]
+    });
+    if (picked.canceled) return { ok: false };
+    fs.mkdirSync(path.dirname(picked.filePath), { recursive: true });
+    fs.copyFileSync(internal, picked.filePath);
+    return { ok: true, path: picked.filePath };
+  } catch (err) { send('error', { message: err.message }); return { ok: false, error: err.message }; }
+});
+
+ipcMain.handle('open-project', async () => {
+  try {
+    const picked = await dialog.showOpenDialog(win, {
+      title: 'Abrir projeto BruxoSplat', filters: [{ name: 'Projeto Bruxos do VFX', extensions: ['bvfx'] }], properties: ['openFile']
+    });
+    if (picked.canceled) return { ok: false };
+    const data = JSON.parse(fs.readFileSync(picked.filePaths[0], 'utf8'));
+    if (data.schema !== 'bruxosplat-project/v1' || !data.workDir || !fs.existsSync(data.workDir)) throw new Error('Este arquivo não aponta para um projeto BruxoSplat disponível neste computador.');
+    preparedDir = data.workDir; savePreparedProject(preparedDir);
+    previewPly = data.pointsPly && fs.existsSync(data.pointsPly) ? data.pointsPly : null;
+    previewCameraPath = data.cameraPath && fs.existsSync(data.cameraPath) ? data.cameraPath : null;
+    lastCameraPath = data.resultCameraPath && fs.existsSync(data.resultCameraPath) ? data.resultCameraPath : previewCameraPath;
+    previewCams = previewCameraPath ? parseCameraPathFile(previewCameraPath) : parseImagesTxt(data.imagesTxt);
+    lastPly = data.resultPly && fs.existsSync(data.resultPly) ? data.resultPly : null;
+    await webEditReady;
+    const base = `http://127.0.0.1:${serverPort}`;
+    send('project-opened', { path: picked.filePaths[0], points: previewPly ? base + '/points.ply' : null, cameras: base + '/cameras.json', cameraPath: lastCameraPath ? base + '/camera-path.json' : null, ply: lastPly, viewerUrl: lastPly ? base + '/webedit/index.html?url=' + base + '/scene.ply' : null });
+    return { ok: true };
+  } catch (err) { send('error', { message: err.message }); return { ok: false, error: err.message }; }
 });
 
 ipcMain.handle('train', async (_e, opts) => {
+  abortRequested = false;
   try {
     let tools;
     if (!preparedDir || opts.forceAlign) tools = await doAlign(opts);
     else tools = await getTools();
-    const ply = await trainSplat(tools, { workDir: preparedDir, steps: opts.steps },
+    if (opts.trainingEngine === 'ppisp') {
+      if (!hasNvidiaGpu()) throw new Error('GSplat + PPISP requer uma GPU NVIDIA com driver CUDA disponível. Use Brush neste computador.');
+      send('status', { stage: 'setup', line: 'Preparando ambiente isolado GSplat + PPISP…' });
+      const ppisp = await ensurePpispTrainer(l => send('status', { stage: 'setup', line: l }));
+      tools.ppispPython = ppisp.py;
+      tools.ppispEnv = ppisp.env;
+    }
+    if (opts.trainingEngine === '3dgrut') {
+      if (!hasNvidiaGpu()) throw new Error('3DGRUT requer GPU NVIDIA/RTX com CUDA.');
+      send('status', { stage: 'setup', line: 'Preparando ambiente isolado 3DGRUT…' });
+      const grut = await ensure3dgrut(l => send('status', { stage: 'setup', line: l }));
+      tools.grutPython = grut.py; tools.grutRepo = grut.repoDir;
+    }
+    const trainer = opts.trainingEngine === 'ppisp' ? trainPpisp : opts.trainingEngine === '3dgrut' ? train3dgrut : trainSplat;
+    // Quando o app é reiniciado entre alinhamento e treino, reaproveita o sidecar
+    // já salvo no projeto para que o resultado final ainda leve a câmera virtual.
+    const preparedCamera = preparedDir && path.join(preparedDir, 'camera_path.json');
+    if (!previewCameraPath && preparedCamera && fs.existsSync(preparedCamera)) {
+      previewCameraPath = preparedCamera;
+      lastCameraPath = preparedCamera;
+    }
+    const trainingResult = await trainer(tools, { workDir: preparedDir, steps: opts.steps, maxSize: opts.maxSize },
       (stage, line, prog) => send('status', { stage, line, prog }),
       (snapPath, prog) => {
         trainPly = snapPath;
         send('trainsnap', { url: `http://127.0.0.1:${serverPort}/train.ply?t=` + Date.now(), prog });
       });
+    const ply = typeof trainingResult === 'string' ? trainingResult : trainingResult.ply;
     const outDir = opts.outDir || path.join(app.getPath('documents'), 'BruxoSplat');
     fs.mkdirSync(outDir, { recursive: true });
     const outPly = path.join(outDir, nextSplatName(outDir));
     fs.copyFileSync(ply, outPly);
+    let outCameraPath = null;
+    if (previewCameraPath && fs.existsSync(previewCameraPath)) {
+      outCameraPath = path.join(outDir, path.parse(outPly).name + '.camera.json');
+      fs.copyFileSync(previewCameraPath, outCameraPath);
+      lastCameraPath = outCameraPath;
+      send('status', { stage: 'train', line: 'Câmera virtual salva: ' + outCameraPath });
+    }
+    let outUsd = null;
+    if (trainingResult && typeof trainingResult === 'object' && trainingResult.usd && fs.existsSync(trainingResult.usd)) {
+      outUsd = path.join(outDir, path.parse(outPly).name + path.extname(trainingResult.usd));
+      fs.copyFileSync(trainingResult.usd, outUsd);
+      send('status', { stage: 'train', line: 'USDZ exportado: ' + outUsd });
+    }
     lastPly = outPly;
+    saveProjectManifest(preparedDir, outPly, outCameraPath);
     await webEditReady;
-    send('done', { ply: outPly, viewerUrl: `http://127.0.0.1:${serverPort}/webedit/index.html?url=http://127.0.0.1:${serverPort}/scene.ply` });
-    return { ok: true, ply: outPly };
-  } catch (err) { send('error', { message: err.message }); return { ok: false }; }
+    send('done', { ply: outPly, usd: outUsd, cameraPath: outCameraPath, viewerUrl: `http://127.0.0.1:${serverPort}/webedit/index.html?url=http://127.0.0.1:${serverPort}/scene.ply` });
+    return { ok: true, ply: outPly, usd: outUsd, cameraPath: outCameraPath };
+  } catch (err) {
+    if (abortRequested) { abortRequested = false; send('cancelled', {}); return { ok: false, cancelled: true }; }
+    send('error', { message: err.message }); return { ok: false };
+  }
+});
+
+ipcMain.handle('abort-work', () => {
+  if (!activeChildren.size) return { ok: false, message: 'Nenhum processo de treino/alinhamento ativo para cancelar.' };
+  abortActiveWork();
+  send('status', { stage: 'train', line: 'Cancelamento solicitado — encerrando o processo atual…' });
+  return { ok: true };
 });
 
 // Converte images.txt do COLMAP em lista de centros/orientações de câmera
@@ -374,13 +637,17 @@ function parseImagesTxt(file) {
           [2*(qx*qz-qw*qy),   2*(qy*qz+qw*qx),   1-2*(qx*qx+qy*qy)]
         ];
         cams.push({
+          id: Number(f[0]), cameraId: Number(f[8]),
           name: f[9],
+          quaternionWorldToCamera: [qw, qx, qy, qz],
+          translationWorldToCamera: [tx, ty, tz],
           pos: [
             -(R[0][0]*tx + R[1][0]*ty + R[2][0]*tz),
             -(R[0][1]*tx + R[1][1]*ty + R[2][1]*tz),
             -(R[0][2]*tx + R[1][2]*ty + R[2][2]*tz)
           ],
-          dir: [R[2][0], R[2][1], R[2][2]] // eixo +Z da câmera no mundo
+          dir: [R[2][0], R[2][1], R[2][2]], // eixo +Z da câmera no mundo
+          up: [-R[1][0], -R[1][1], -R[1][2]] // eixo vertical (corrige roll no viewport)
         });
         i++; // pula a linha de points2D
       }
@@ -388,6 +655,40 @@ function parseImagesTxt(file) {
     cams.sort((a, b) => a.name.localeCompare(b.name));
   } catch {}
   return cams;
+}
+
+function parseCameraIntrinsics(imagesTxt) {
+  const result = {};
+  try {
+    const file = path.join(path.dirname(imagesTxt), 'cameras.txt');
+    for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+      const f = line.trim().split(/\s+/);
+      if (line.startsWith('#') || f.length < 5 || !/^\d+$/.test(f[0])) continue;
+      result[f[0]] = { id: Number(f[0]), model: f[1], width: Number(f[2]), height: Number(f[3]), params: f.slice(4).map(Number) };
+    }
+  } catch {}
+  return result;
+}
+
+// Formato portátil para reabrir a câmera no viewport ou no WebEDIT. Mantém tanto
+// a pose COLMAP original quanto vetores prontos para um viewer 3D.
+function saveCameraPath(workDir, imagesTxt, alignmentMethod, videos) {
+  const frames = parseImagesTxt(imagesTxt).map((cam, index) => ({
+    index, image: cam.name, cameraId: cam.cameraId,
+    position: cam.pos, forward: cam.dir, up: cam.up,
+    quaternionWorldToCamera: cam.quaternionWorldToCamera,
+    translationWorldToCamera: cam.translationWorldToCamera
+  }));
+  const data = {
+    schema: 'bruxos-camera-path/v1', generator: 'BruxoSplat', createdAt: new Date().toISOString(),
+    alignmentMethod: alignmentMethod || 'colmap',
+    coordinateSystem: 'COLMAP world coordinates; poses are world-to-camera; viewport/WebEDIT display flips Y.',
+    sourceFps: Number(videos && videos[0] && videos[0].fps) || null,
+    cameras: parseCameraIntrinsics(imagesTxt), frames
+  };
+  const output = path.join(workDir, 'camera_path.json');
+  fs.writeFileSync(output, JSON.stringify(data, null, 2), 'utf8');
+  return output;
 }
 
 ipcMain.handle('open-ply', async () => {
@@ -402,11 +703,14 @@ ipcMain.handle('open-ply', async () => {
   });
   if (r.canceled) return null;
   lastPly = r.filePaths[0];
+  const sidecar = path.join(path.dirname(lastPly), path.parse(lastPly).name + '.camera.json');
+  lastCameraPath = fs.existsSync(sidecar) ? sidecar : null;
   lastPlyFormat = path.extname(lastPly).slice(1).toLowerCase() || 'ply';
   await webEditReady;
   return {
     path: lastPly,
     format: lastPlyFormat, // 'ply' | 'splat' | 'ksplat' — o editor de pontos (gizmo) só entende 'ply'
+    cameraPath: lastCameraPath ? `http://127.0.0.1:${serverPort}/camera-path.json` : null,
     viewerUrl: `http://127.0.0.1:${serverPort}/webedit/index.html?url=http://127.0.0.1:${serverPort}/scene.ply`
   };
 });
@@ -472,7 +776,7 @@ ipcMain.handle('convert-seq-splat', async () => {
     const srcDir = path.dirname(seq4d[0].path);
     const outDir = path.join(app.getPath('userData'), 'seq_splat', 'conv_' + Date.now());
     fs.mkdirSync(outDir, { recursive: true });
-    const script = path.join(__dirname, 'models', 'ply2splat.py');
+    const script = modelScript('ply2splat.py');
     const { spawn } = require('child_process');
     await new Promise((resolve, reject) => {
       const p = spawn(py, [script, '--input', srcDir, '--output', outDir], { windowsHide: true });
@@ -494,8 +798,15 @@ ipcMain.handle('save-ply', async (_e, buf, name) => {
   const out = path.join(outDir, name || nextSplatName(outDir));
   fs.writeFileSync(out, Buffer.from(buf));
   lastPly = out;
+  let cameraPath = null;
+  if (lastCameraPath && fs.existsSync(lastCameraPath)) {
+    const sidecar = path.join(outDir, path.parse(out).name + '.camera.json');
+    if (path.resolve(sidecar) !== path.resolve(lastCameraPath)) fs.copyFileSync(lastCameraPath, sidecar);
+    lastCameraPath = sidecar;
+    cameraPath = `http://127.0.0.1:${serverPort}/camera-path.json`;
+  }
   await webEditReady;
-  return { path: out, viewerUrl: `http://127.0.0.1:${serverPort}/webedit/index.html?url=http://127.0.0.1:${serverPort}/scene.ply` };
+  return { path: out, cameraPath, viewerUrl: `http://127.0.0.1:${serverPort}/webedit/index.html?url=http://127.0.0.1:${serverPort}/scene.ply` };
 });
 
 ipcMain.handle('model-list', () => Object.entries(MODELS).map(([k, m]) => ({ key: k, name: m.name, sizeHint: m.sizeHint })));

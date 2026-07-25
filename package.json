@@ -1,7 +1,7 @@
 {
   "name": "bruxosplat",
   "productName": "BruxoSplat",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Vídeo → 3D Gaussian Splatting no seu PC, com a sua GPU. Por Bruxos do VFX.",
   "main": "main.js",
   "author": "Bruxos do VFX",
@@ -32,6 +32,10 @@
       "ui/**/*",
       "models/**/*"
     ],
+    "asarUnpack": [
+      "models/**/*"
+    ],
+    "afterPack": "scripts/after-pack.js",
     "win": {
       "target": [
         "nsis",
@@ -57,8 +61,7 @@
       "artifactName": "BruxoSplat-${version}-${arch}.${ext}",
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
-      "identity": null,
-      "sign": false
+      "identity": null
     },
     "dmg": {
       "artifactName": "BruxoSplat-${version}-${arch}.${ext}"
