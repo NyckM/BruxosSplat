@@ -22,6 +22,7 @@
   "build": {
     "appId": "com.bruxosdovfx.bruxosplat",
     "productName": "BruxoSplat",
+    "electronVersion": "31.7.7",
     "files": [
       "main.js",
       "preload.js",
@@ -61,7 +62,7 @@
       "artifactName": "BruxoSplat-${version}-${arch}.${ext}",
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
-      "identity": "-"
+      "identity": null
     },
     "dmg": {
       "artifactName": "BruxoSplat-${version}-${arch}.${ext}"
