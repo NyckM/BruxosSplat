@@ -8,7 +8,7 @@
     --bg:#1b1b1f; --bg2:#232327; --bg3:#2b2b30; --line:#3a3a40;
     --tx:#d8d8dc; --mut:#8b8b93; --acc:#8b5cf6; --acc2:#a78bfa; --grn:#22c55e; --grn2:#86efac; --ok:#22c55e;
   }
-  * { box-sizing:border-box; margin:0; font-family:'Segoe UI',sans-serif; font-size:13px; }
+  * { box-sizing:border-box; margin:0; font-family:'Segoe UI',sans-serif; font-size:13px; scrollbar-color:var(--line) var(--bg2); }
   body { background:var(--bg); color:var(--tx); height:100vh; display:flex; flex-direction:column; overflow:hidden; }
 
   #topbar { display:flex; align-items:center; gap:2px; background:var(--bg2); border-bottom:1px solid var(--line); padding:3px 8px; position:relative; z-index:50; }
@@ -19,8 +19,9 @@
   .tbtn .ic { font-size:16px; }
   #brand { margin-left:auto; display:flex; align-items:center; gap:8px; padding-right:8px; }
   #brand b { font-size:15px; } #brand b span { color:var(--acc2); }
+  #appVersion { font-size:10px; color:var(--mut); font-weight:400; margin-left:2px; align-self:flex-end; }
 
-  #main { flex:1; display:flex; overflow:hidden; position:relative; z-index:1; }
+  #main { flex:1; min-height:0; display:flex; overflow:hidden; position:relative; z-index:1; }
 
   /* left tool strip (Postshot style) */
   #ltools { width:44px; background:var(--bg2); border-right:1px solid var(--line); display:flex; flex-direction:column; align-items:center; padding-top:6px; gap:2px; position:relative; z-index:10; }
@@ -38,16 +39,25 @@
   #vpBadge { position:absolute; top:10px; left:10px; background:rgba(20,20,24,.8); border:1px solid var(--line); border-radius:6px; padding:4px 10px; font-size:11px; color:var(--acc2); display:none; }
   #statusOverlay { position:absolute; left:0; right:0; bottom:0; background:rgba(20,20,24,.92); border-top:1px solid var(--line); padding:8px 14px; display:none; z-index:30; }
   #statusOverlay .row { display:flex; justify-content:space-between; }
+  #statusOverlay .right { display:flex; align-items:center; gap:9px; }
+  #btnAbort { width:23px; height:23px; border:1px solid #a34a58; border-radius:5px; background:#351b23; color:#ff9aa8; font-size:19px; line-height:17px; cursor:pointer; }
+  #btnAbort:hover { background:#632432; color:#fff; }
+  #btnAbort:disabled { opacity:.45; cursor:wait; }
   #stageLabel { color:var(--grn2); font-weight:600; }
   #stageLine { color:var(--mut); font-size:12px; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   #obar { height:4px; background:var(--bg3); border-radius:2px; margin-top:6px; overflow:hidden; }
   #obarIn { height:100%; width:0; background:linear-gradient(90deg,var(--acc),var(--grn)); transition:width .4s; }
+  #stageHeartbeat { color:var(--grn2); font-size:11px; opacity:.85; }
+  #stageHeartbeat.pulse { animation: bxHbPulse 1.1s ease-in-out infinite; }
+  @keyframes bxHbPulse { 0%,100% { opacity:.35; } 50% { opacity:1; } }
+  #lossChart { display:none; width:100%; height:46px; margin-top:7px; border-radius:4px; background:rgba(255,255,255,.04); }
+  #lossChartLabel { display:none; color:var(--mut); font-size:10px; margin-top:3px; justify-content:space-between; }
 
-  #right { width:330px; background:var(--bg2); border-left:1px solid var(--line); display:flex; flex-direction:column; }
-  #tabs { display:flex; border-bottom:1px solid var(--line); }
+  #right { width:330px; min-height:0; overflow:hidden; background:var(--bg2); border-left:1px solid var(--line); display:flex; flex-direction:column; }
+  #tabs { flex:none; display:flex; border-bottom:1px solid var(--line); }
   .tab { padding:8px 16px; cursor:pointer; color:var(--mut); border-bottom:2px solid transparent; }
   .tab.active { color:var(--grn2); border-bottom-color:var(--grn); }
-  .tabpage { flex:1; overflow-y:auto; padding:10px; display:none; }
+  .tabpage { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; padding:10px 10px 22px; display:none; }
   .tabpage.active { display:block; }
 
   .tree div { padding:4px 6px; border-radius:4px; }
@@ -76,7 +86,13 @@
   .active .dot { background:var(--acc); animation:pulse 1s infinite; } .done .dot { background:var(--ok); }
   @keyframes pulse { 50% { opacity:.35 } }
 
-  #statusbar { background:var(--bg2); border-top:1px solid var(--line); padding:4px 12px; color:var(--mut); font-size:11px; display:flex; gap:16px; }
+  #statusbar { flex:none; background:var(--bg2); border-top:1px solid var(--line); padding:4px 12px; color:var(--mut); font-size:11px; display:flex; gap:16px; }
+  /* Barras de rolagem no tema do app (Chrome/Electron e Firefox). */
+  ::-webkit-scrollbar { width:10px; height:10px; }
+  ::-webkit-scrollbar-track { background:var(--bg2); border-left:1px solid var(--line); }
+  ::-webkit-scrollbar-thumb { background:#4a4a53; border:2px solid var(--bg2); border-radius:8px; }
+  ::-webkit-scrollbar-thumb:hover { background:var(--acc2); }
+  ::-webkit-scrollbar-corner { background:var(--bg2); }
   [data-tip] { position:relative; }
   [data-tip]:hover::after {
     content:attr(data-tip);
@@ -96,15 +112,16 @@
 <body>
 
 <div id="topbar">
-  <button class="tbtn" id="btnVideo"><span class="ic">🎥</span><span class="lbl"></span></button>
-  <button class="tbtn" id="btnAlign" disabled><span class="ic">📐</span><span class="lbl"></span></button>
-  <button class="tbtn" id="btnStart" disabled><span class="ic">⚙️</span><span class="lbl"></span></button>
-  <button class="tbtn" id="btnFolder" disabled><span class="ic">📂</span><span class="lbl"></span></button>
-  <button class="tbtn" id="btnWebTop"><span class="ic icon-hat"><svg width="16" height="16" viewBox="0 0 24 24"><path d="M12 2 L17.5 15.5 H6.5 Z" fill="#8b5cf6"/><rect x="7.5" y="12.2" width="9" height="2" fill="#22c55e"/><ellipse cx="12" cy="16.5" rx="9.5" ry="2.4" fill="#8b5cf6"/><circle cx="12" cy="3.4" r="1.3" fill="#22c55e"/></svg></span><span class="lbl">WebEDIT</span></button>
-  <button class="tbtn" id="btnSuper" disabled><span class="ic">🟠</span><span class="lbl">SuperSplat</span></button>
-  <button class="tbtn" id="btnOut"><span class="ic">📁</span><span class="lbl"></span></button>
+  <button class="tbtn" id="btnVideo" data-i18n-tip="tip.video"><span class="ic">🎥</span><span class="lbl"></span></button>
+  <button class="tbtn" id="btnAlign" disabled data-i18n-tip="tip.align"><span class="ic">📐</span><span class="lbl"></span></button>
+  <button class="tbtn" id="btnColmap" data-i18n-tip="tip.colmap"><span class="ic">🔭</span><span class="lbl">COLMAP</span></button>
+  <button class="tbtn" id="btnStart" disabled data-i18n-tip="tip.start"><span class="ic">⚙️</span><span class="lbl"></span></button>
+  <button class="tbtn" id="btnFolder" disabled data-i18n-tip="tip.folder"><span class="ic">📂</span><span class="lbl"></span></button>
+  <button class="tbtn" id="btnWebTop" data-i18n-tip="tip.webedit"><span class="ic icon-hat"><svg width="16" height="16" viewBox="0 0 24 24"><path d="M12 2 L17.5 15.5 H6.5 Z" fill="#8b5cf6"/><rect x="7.5" y="12.2" width="9" height="2" fill="#22c55e"/><ellipse cx="12" cy="16.5" rx="9.5" ry="2.4" fill="#8b5cf6"/><circle cx="12" cy="3.4" r="1.3" fill="#22c55e"/></svg></span><span class="lbl">WebEDIT</span></button>
+  <button class="tbtn" id="btnSuper" disabled data-i18n-tip="tip.super"><span class="ic">🟠</span><span class="lbl">SuperSplat</span></button>
+  <button class="tbtn" id="btnOut" data-i18n-tip="tip.out"><span class="ic">📁</span><span class="lbl"></span></button>
   <button class="tbtn" id="btnLang" data-i18n-tip="tip.lang"><span class="ic">🌐</span><span class="lbl" id="langLbl">PT-BR</span></button>
-  <div id="brand"><img src="https://nyckm.github.io/3dGS_WebEDIT/Bruxos.png" style="height:26px;border-radius:6px" onerror="this.style.display='none'"> <b>Bruxo<span>Splat</span></b></div>
+  <div id="brand"><img src="https://nyckm.github.io/3dGS_WebEDIT/Bruxos.png" style="height:26px;border-radius:6px" onerror="this.style.display='none'"> <b>Bruxo<span>Splat</span></b><span id="appVersion" title="Versão do BruxoSplat"></span></div>
 </div>
 
 <div id="main">
@@ -157,6 +174,7 @@
     <button id="btnBackEd" data-i18n="btn.backEd" style="display:none;background:var(--grn);color:#06130a;border:none;border-radius:8px;padding:7px 12px;cursor:pointer;font-weight:600;opacity:.9">← Voltar ao editor</button>
     <div id="playbar" style="display:flex;gap:4px">
       <button class="ltool" id="pbPlay" data-i18n-tip="tip.pbPlay">▶</button>
+      <button class="ltool" id="pbCamPath" data-i18n-tip="tip.pbCamPath" disabled>🎥</button>
       <button class="ltool" id="pbStop" data-i18n-tip="tip.pbStop">■</button>
       <button class="ltool" id="pbSlow" data-i18n-tip="tip.pbSlow">−</button>
       <button class="ltool" id="pbFast" data-i18n-tip="tip.pbFast">＋</button>
@@ -177,9 +195,11 @@
       <button class="ltool" id="t4dExportPack" data-i18n-tip="tip.t4dExportPack" style="width:auto;padding:0 10px;font-size:11px">📦 .splat4d</button>
     </div>
     <div id="statusOverlay">
-      <div class="row"><span id="stageLabel">—</span><span id="stagePct"></span></div>
+      <div class="row"><span id="stageLabel">—</span><span class="right"><span id="stageHeartbeat" class="pulse">●</span><span id="stagePct"></span><button id="btnAbort" title="Abortar processamento" aria-label="Abortar processamento">×</button></span></div>
       <div id="stageLine"></div>
       <div id="obar"><div id="obarIn"></div></div>
+      <canvas id="lossChart" width="600" height="46"></canvas>
+      <div id="lossChartLabel"><span id="lossChartFirst"></span><span id="lossChartLast"></span></div>
     </div>
   </div>
 
@@ -190,6 +210,7 @@
       <div class="tab" data-t="params" data-i18n="tab.params">Parâmetros</div>
       <div class="tab" data-t="ia" data-i18n="tab.ia">Modos IA</div>
       <div class="tab" data-t="log" data-i18n="tab.log">Log</div>
+      <button class="tab" id="btnCopyLogTop" data-copy-log data-i18n-tip="tip.copyLog" style="border:0;background:none;padding:8px 9px" aria-label="Copiar log">📋</button>
     </div>
 
     <div class="tabpage active" id="pg-scene">
@@ -200,6 +221,7 @@
         <div class="lvl1" id="tCams" data-i18n-html="tree.camsDash">🎦 Câmeras — <i>—</i></div>
         <div class="lvl1" id="tSplat" data-i18n-html="tree.splatNotGen">✨ Splat — <i>não gerado</i></div>
       </div>
+      <div class="btn-pair" style="margin-top:10px"><button class="btn" id="btnSaveProject" data-i18n="ui.saveProject">💾 Salvar projeto</button><button class="btn" id="btnOpenProject" data-i18n="ui.openProject">📂 Abrir projeto</button></div>
       <div style="margin-top:14px" class="group"><h4 data-i18n="progress.title">Progresso</h4><div class="body">
         <div class="stage" id="st-setup"><div class="dot"></div><span data-i18n="progress.setup">Ferramentas (ffmpeg · COLMAP · Brush)</span></div>
         <div class="stage" id="st-frames"><div class="dot"></div><span data-i18n="progress.frames">Extração de frames</span></div>
@@ -213,27 +235,119 @@
         <div id="videoList" style="font-size:11px"></div>
         <button class="btn" id="btnAddVideo" data-i18n="params.addVideo">＋ Adicionar vídeo</button>
         <div class="path" data-i18n="params.hint">Início/Fim: hh:mm:ss (vazio = vídeo todo) · Intervalo: segundos entre fotos</div>
+        <div class="path" data-i18n="params.equirectHint">360/equiretangular: selecione o tipo no vídeo. O app cria 4 câmeras virtuais antes do COLMAP.</div>
       </div></div>
       <div class="group"><h4 data-i18n="params.trainGroup">Treino</h4><div class="body">
+        <label data-i18n="params.trainingEngine">Motor de treino</label>
+        <select id="trainingEngine">
+          <option value="brush" selected data-i18n="opt.engineBrush">Brush — compatível (padrão)</option>
+          <option value="ppisp" data-i18n="opt.enginePpisp">GSplat + PPISP — NVIDIA/CUDA (experimental)</option>
+          <option value="3dgrut">3DGRUT / Ray Tracing — RTX (experimental)</option>
+        </select>
+        <div class="path" id="trainingEngineHint" data-i18n="params.ppispHint">PPISP corrige exposição, vinheta e cor entre frames. Requer GPU NVIDIA, CUDA Toolkit e Visual Studio Build Tools; instala um ambiente isolado na primeira vez.</div>
         <label data-i18n="params.quality">Qualidade (passos)</label>
         <select id="steps">
           <option value="7000" data-i18n="opt.draft">Rascunho — 7k (rápido)</option>
           <option value="15000" data-i18n="opt.medium">Média — 15k</option>
           <option value="30000" selected data-i18n="opt.high">Alta — 30k</option>
           <option value="50000" data-i18n="opt.max">Máxima — 50k (lento)</option>
+          <option value="75000" data-i18n="opt.ultra">Ultra — 75k (bem lento)</option>
+          <option value="100000" data-i18n="opt.extreme">Extreme — 100k (muito lento)</option>
+          <option value="custom" data-i18n="opt.customSteps">Custom — escolher valor</option>
         </select>
+        <input type="number" id="stepsCustom" min="1000" max="500000" step="1000" value="30000" style="display:none" data-i18n-placeholder="params.customStepsPlaceholder" placeholder="Número de passos">
+        <label data-i18n="params.lpips">Nitidez extra (perceptual)</label>
+        <select id="lpips">
+          <option value="0" selected data-i18n="opt.lpipsOff">Desligada (padrão)</option>
+          <option value="0.1" data-i18n="opt.lpipsLow">Leve</option>
+          <option value="0.25" data-i18n="opt.lpipsMed">Média</option>
+          <option value="0.5" data-i18n="opt.lpipsHigh">Forte</option>
+        </select>
+        <div class="path" data-i18n="params.lpipsHint">Ativa a perda perceptual LPIPS no motor Brush: compara as imagens pelo que o olho percebe, não pixel a pixel. Costuma dar um salto de nitidez percebida em textura fina, mas deixa o treino mais lento. Só no motor Brush em desktop. Deixe desligada ao comparar resultados — ela muda a métrica e contamina o teste.</div>
       </div></div>
       <div class="group"><h4 data-i18n="params.frameExtraction">Extração de frames</h4><div class="body">
         <label data-i18n="params.maxRes">Resolução máxima (lado maior, px)</label>
-        <select id="maxSize"><option>1280</option><option selected>1600</option><option>1920</option></select>
+        <select id="maxSize">
+          <option value="1280">1280 — rápido</option>
+          <option value="1600" selected>1600 — equilibrado</option>
+          <option value="1920">1920 — Full HD</option>
+          <option value="2560">2560 — 2.5K (mais VRAM)</option>
+          <option value="3840">3840 — 4K (muita VRAM)</option>
+        </select>
+        <div class="path" data-i18n="params.maxResHint">Resolução dos frames usados no treino — é o que mais define a nitidez dos Gaussians. 2.5K/4K exigem bem mais VRAM e tempo: se der falta de memória, baixe o FPS de extração (menos frames) antes de baixar a resolução.</div>
       </div></div>
       <div class="group"><h4 data-i18n="params.alignGroup">Alinhamento de câmera</h4><div class="body">
         <label data-i18n="params.alignMethod">Método</label>
         <select id="alignMethod">
           <option value="colmap" selected data-i18n="opt.alignColmap">COLMAP (padrão)</option>
-          <option value="dpvo" data-i18n="opt.alignDpvo">DPVO — foco em movimento de câmera (experimental, requer Docker + GPU NVIDIA)</option>
+          <option value="dpvo" data-i18n="opt.alignDpvo">DPVO direto — câmera rápida (pacote local CEB)</option>
+          <option value="mast3r" data-i18n="opt.alignMast3r">MASt3R — IA para cenas difíceis (experimental, uso não comercial*)</option>
+          <option value="megasam" data-i18n="opt.alignMegaSam">MegaSam — câmera + profundidade para cenas dinâmicas (experimental)</option>
         </select>
         <div class="path" data-i18n="params.alignHint">DPVO é bem mais rápido em vídeos longos, mas a calibração da câmera é aproximada (sem EXIF) e a nuvem de pontos inicial é mais esparsa que a do COLMAP.</div>
+        <label data-i18n="params.colmapPreset">Qualidade do alinhamento (COLMAP)</label>
+        <select id="colmapPreset">
+          <option value="auto" selected data-i18n="opt.cmAuto">Automático (atual, seguro)</option>
+          <option value="high" data-i18n="opt.cmHigh">Alta — mais features + guided matching</option>
+          <option value="max" data-i18n="opt.cmMax">Máxima — DSP-SIFT + affine (bem lento, CPU)</option>
+          <option value="custom" data-i18n="opt.cmCustom">Personalizado…</option>
+        </select>
+        <div class="path" data-i18n="params.colmapPresetHint">"Automático" usa o modo atual do COLMAP e não muda nada. As outras opções trocam para o pipeline em etapas (extração → matching → mapper), com mais keypoints e verificação guiada — melhora o alinhamento em cenas com textura fina, ao custo de tempo. Mantenha em "Automático" enquanto estiver comparando resultados de treino.</div>
+        <div id="cmCustomBox" style="display:none">
+          <label data-i18n="params.cmFeatures">Máx. features por imagem</label>
+          <select id="cmFeatures">
+            <option value="8192">8192 — padrão do COLMAP</option>
+            <option value="16384" selected>16384 — mais pontos</option>
+            <option value="32768">32768 — máximo (RAM/tempo)</option>
+          </select>
+          <label data-i18n="params.cmPeak">Peak threshold (sensibilidade)</label>
+          <select id="cmPeak">
+            <option value="0.00667">0.00667 — padrão</option>
+            <option value="0.003" selected>0.003 — mais keypoints</option>
+            <option value="0.002">0.002 — muito sensível (pode dar ruído)</option>
+          </select>
+          <label data-i18n="params.cmMatcher">Matching</label>
+          <select id="cmMatcher">
+            <option value="sequential" selected data-i18n="opt.cmSeq">Sequencial (vídeo — recomendado)</option>
+            <option value="exhaustive" data-i18n="opt.cmExh">Exaustivo (fotos sem ordem, poucas imagens)</option>
+            <option value="vocabtree" data-i18n="opt.cmVocab">Vocabulary tree (centenas de imagens sem ordem)</option>
+          </select>
+          <div class="chk"><input type="checkbox" id="cmGuided" checked><span data-i18n="params.cmGuided">Guided matching (usa a geometria para achar mais correspondências)</span></div>
+          <div class="chk"><input type="checkbox" id="cmLoop"><span data-i18n="params.cmLoop">Loop detection (vídeo que dá a volta e volta ao início) — baixa ~250 MB na 1ª vez</span></div>
+          <div class="chk"><input type="checkbox" id="cmAffine"><span data-i18n="params.cmAffine">Affine shape (câmeras inclinadas/drone) — força CPU, bem mais lento</span></div>
+          <div class="chk"><input type="checkbox" id="cmDsp"><span data-i18n="params.cmDsp">DSP-SIFT (mudanças de escala e borrão de vídeo) — força CPU, bem mais lento</span></div>
+          <div class="chk"><input type="checkbox" id="cmBA" checked><span data-i18n="params.cmBA">Bundle adjustment completo (refina focal, ponto principal e distorção)</span></div>
+          <label data-i18n="params.cmMinMatches">Mínimo de correspondências</label>
+          <select id="cmMinMatches">
+            <option value="15" selected>15 — padrão</option>
+            <option value="10">10 — cenas com pouca textura</option>
+          </select>
+          <label data-i18n="params.cmTriAngle">Ângulo mínimo de triangulação (°)</label>
+          <select id="cmTriAngle">
+            <option value="1.5" selected>1.5 — padrão</option>
+            <option value="2">2.0 — mais rigoroso</option>
+            <option value="1">1.0 — cenas pequenas/estreitas</option>
+          </select>
+          <div class="path" data-i18n="params.cmCustomHint">Affine shape e DSP-SIFT não têm implementação em GPU no COLMAP: ligar qualquer um dos dois joga a extração de features para a CPU, o que pode multiplicar o tempo dessa etapa por várias vezes. Valem a pena em cenas difíceis, não como padrão.</div>
+        </div>
+        <label data-i18n="params.dpvoMaxRes">Resolução DPVO (lado maior, px)</label>
+        <select id="dpvoMaxSize">
+          <option value="640">640 — mais rápido</option>
+          <option value="960" selected>960 — recomendado</option>
+          <option value="1280">1280 — mais detalhe / mais lento</option>
+          <option value="0">Original — muito lento</option>
+        </select>
+        <div class="path" data-i18n="params.dpvoResHint">No modo DPVO, esta é também a resolução dos frames usados no treino. Para textura máxima, use COLMAP com 1600/1920 px.</div>
+        <label data-i18n="params.dpvoFov">Campo de visão da câmera (DPVO)</label>
+        <select id="dpvoFov">
+          <option value="45">~45° — zoom / teleobjetiva</option>
+          <option value="60" selected>~60° — celular normal</option>
+          <option value="80">~80° — celular ultra-wide</option>
+          <option value="100">~100° — ação/GoPro (wide)</option>
+          <option value="130">~130° — ação/GoPro (superwide)</option>
+        </select>
+        <div class="path" data-i18n="params.dpvoFovHint">DPVO não lê o FOV real do EXIF do vídeo — ele assume esse valor pra calcular a distância focal. Se a câmera/trajetória aparecerem "erradas" (escala ou proporção não batendo com o vídeo gravado), o valor errado aqui costuma ser a causa: ajuste pro campo de visão real da câmera que gravou.</div>
+        <div class="path" data-i18n="params.mast3rLicense">* MASt3R e seus pesos: licença CC BY-NC-SA 4.0 — uso não comercial. Verifique a licença antes de uso ou distribuição comercial.</div>
       </div></div>
       <div class="group"><h4 data-i18n="params.editorGroup">Editor</h4><div class="body">
         <label data-i18n="params.splatScale">Escala do splat</label>
@@ -278,6 +392,12 @@
         <button class="btn" id="iaInstallTripo" data-i18n="ia.installTripo">⬇ Instalar TripoSplat</button>
         <button class="btn go" id="iaRunTripo" data-i18n="ia.runTripo">🖼 Escolher imagem e gerar</button>
       </div></div>
+      <div class="group"><h4>Foto/Vídeo → 3DGS (ZipSplat)</h4><div class="body">
+        <div class="path">Reconstrução rápida sem poses nem COLMAP. Requer GPU NVIDIA; os pesos são baixados na primeira execução.</div>
+        <button class="btn" id="iaInstallZip">⬇ Instalar ZipSplat</button>
+        <button class="btn go" id="iaRunZipImage">🖼 Escolher foto e gerar</button>
+        <button class="btn go" id="iaRunZipVideo">🎬 Escolher vídeo e gerar</button>
+      </div></div>
       <div class="group"><h4 data-i18n="ia.faceGroup">Vídeo → Rosto 4D (FaceAnything)</h4><div class="body">
         <div class="path" data-i18n="ia.faceHint">Reconstrói o rosto em 4D a partir de um vídeo curto (3-8s, rosto bem enquadrado). Gera uma sequência de .splat pra abrir no player4D do WebEDIT. Instala ~15 GB na primeira vez (checkpoint). Requer GPU NVIDIA e Git instalado. Licença CC BY-NC (uso não-comercial).</div>
         <label data-i18n="ia.faceMaxFrames">Máximo de frames</label>
@@ -287,7 +407,10 @@
       </div></div>
       <div class="path" data-i18n="ia.footer">Os modelos são instalados aos poucos, num ambiente Python compartilhado (uv).</div>
     </div>
-    <div class="tabpage" id="pg-log"><div id="log"></div></div>
+    <div class="tabpage" id="pg-log">
+      <div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="btn" id="btnCopyLog" data-copy-log data-i18n="ui.copyLog" data-i18n-tip="tip.copyLog" style="width:auto;margin:0;padding:6px 10px">📋 Copiar log</button></div>
+      <div id="log"></div>
+    </div>
   </div>
 </div>
 
@@ -341,7 +464,7 @@
 
   const grid = new THREE.GridHelper(10, 20, 0x3a3a40, 0x26262b);
   scene.add(grid);
-  let ptsObj = null, camsObj = null;
+  let ptsObj = null, camsObj = null, previewCams = [], cameraPathPlaying = false, cameraPathStart = 0, cameraPathFrame = 0;
 
   function resize() {
     const w = canvas.clientWidth, h = canvas.clientHeight;
@@ -353,6 +476,12 @@
   (function loop(){
     requestAnimationFrame(loop);
     if (orbiting) { theta += orbitSpeed; updateCam(); }
+    if (cameraPathPlaying && previewCams.length) {
+      const duration = Math.max(2200, previewCams.length * 80);
+      const u = (performance.now() - cameraPathStart) / duration;
+      if (u >= 1) { window.setCameraPathFrame(1); cameraPathPlaying = false; document.getElementById('pbCamPath').classList.remove('sel'); }
+      else window.setCameraPathFrame(u);
+    }
     renderer.render(scene, camera);
   })();
   window.setOrbit = v => orbiting = v;
@@ -558,31 +687,73 @@
     return new THREE.Points(g, new THREE.PointsMaterial({ size: 0.02, vertexColors: true }));
   }
 
+  // Monta o objeto do trajeto de câmera. Estrutura em dois níveis, de propósito:
+  //   camsObj (rotation.x = PI, o mesmo flip de exibição do ed.flip)
+  //     └── camsInner  ← recebe a MESMA transformação que o usuário aplica nos
+  //                      Gaussians pelo gizmo (ed.obj), para que o trajeto
+  //                      acompanhe a nuvem em vez de ficar solto no espaço.
+  // Antes o trajeto era um grupo único preso à cena: mover/girar/escalar os
+  // Gaussians deixava as câmeras para trás, "descoladas" do modelo.
+  let camsInner = null;
+  function buildCamsObj(cams, sizeRef) {
+    const outer = new THREE.Group(); outer.rotation.x = Math.PI;
+    const inner = new THREE.Group(); outer.add(inner);
+    const pathPts = cams.map(c => new THREE.Vector3(...c.pos));
+    inner.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pathPts), new THREE.LineBasicMaterial({ color: 0xa78bfa })));
+    const refSize = Math.max(1, (sizeRef || new THREE.Box3().setFromPoints(pathPts)).getSize(new THREE.Vector3()).length());
+    const camSize = Math.max(0.025, refSize * 0.025);
+    const coneG = new THREE.ConeGeometry(camSize * 0.45, camSize, 4);
+    const coneM = new THREE.MeshBasicMaterial({ color: 0x8b5cf6, wireframe: true });
+    for (const c of cams) {
+      const cone = new THREE.Mesh(coneG, coneM);
+      cone.position.set(...c.pos);
+      // lookAt orienta o +Z do mesh; o cone aponta pro +Y, então o rotateX(+90°)
+      // leva a ponta do cone para a direção de visada.
+      cone.lookAt(new THREE.Vector3(...c.pos).add(new THREE.Vector3(...c.dir)));
+      cone.rotateX(Math.PI / 2);
+      inner.add(cone);
+    }
+    camsInner = inner;
+    syncCamsToEditor();
+    return outer;
+  }
+  // Espelha no trajeto a transformação que o gizmo aplicou nos Gaussians.
+  // O try/catch existe porque `ed` é declarado com `const` mais abaixo neste mesmo
+  // escopo: na prática estas funções só rodam por ação do usuário (bem depois da
+  // inicialização), mas tocar em `ed` antes da declaração seria um ReferenceError
+  // de zona morta temporal — que nenhum teste de sintaxe pega.
+  function syncCamsToEditor() {
+    if (!camsInner) return;
+    try {
+      if (!ed || !ed.obj) return;
+      camsInner.position.copy(ed.obj.position);
+      camsInner.quaternion.copy(ed.obj.quaternion);
+      camsInner.scale.copy(ed.obj.scale);
+    } catch (_) { /* editor ainda não inicializado */ }
+  }
+  window.__syncCamsToEditor = syncCamsToEditor;
+
   window.showPreview = async (pointsUrl, camsUrl) => {
     try {
       if (ptsObj) scene.remove(ptsObj);
       if (camsObj) scene.remove(camsObj);
-      ptsObj = await loadPly(pointsUrl);
-      // COLMAP é Y-para-baixo: vira de cabeça para cima
-      ptsObj.rotation.x = Math.PI; scene.add(ptsObj);
-      const cams = await (await fetch(camsUrl)).json();
-      camsObj = new THREE.Group(); camsObj.rotation.x = Math.PI;
-      const pathPts = cams.map(c => new THREE.Vector3(...c.pos));
-      camsObj.add(new THREE.Line(
-        new THREE.BufferGeometry().setFromPoints(pathPts),
-        new THREE.LineBasicMaterial({ color: 0xa78bfa })));
-      const coneG = new THREE.ConeGeometry(0.04, 0.09, 4);
-      const coneM = new THREE.MeshBasicMaterial({ color: 0x8b5cf6, wireframe: true });
-      for (const c of cams) {
-        const cone = new THREE.Mesh(coneG, coneM);
-        cone.position.set(...c.pos);
-        cone.lookAt(new THREE.Vector3(...c.pos).add(new THREE.Vector3(...c.dir)));
-        cone.rotateX(Math.PI / 2);
-        camsObj.add(cone);
+      try {
+        ptsObj = await loadPly(pointsUrl);
+        // COLMAP é Y-para-baixo: vira de cabeça para cima
+        ptsObj.rotation.x = Math.PI; scene.add(ptsObj);
+      } catch (pointError) {
+        // DPVO pode entregar poses antes de uma nuvem útil: nunca esconda o
+        // trajeto por causa disso.
+        console.warn('Preview de pontos indisponível:', pointError);
+        ptsObj = null;
       }
+      const cams = await (await fetch(camsUrl)).json();
+      previewCams = cams;
+      const pathPts = cams.map(c => new THREE.Vector3(...c.pos));
+      camsObj = buildCamsObj(cams, ptsObj ? new THREE.Box3().setFromObject(ptsObj) : new THREE.Box3().setFromPoints(pathPts));
       scene.add(camsObj);
       // enquadra
-      const box = new THREE.Box3().setFromObject(ptsObj);
+      const box = ptsObj ? new THREE.Box3().setFromObject(ptsObj) : new THREE.Box3().setFromPoints(pathPts);
       const c = box.getCenter(new THREE.Vector3());
       target.copy(c); radius = Math.max(1, box.getSize(new THREE.Vector3()).length() * 0.6);
       updateCam();
@@ -590,10 +761,71 @@
       document.getElementById('placeholder').style.display = 'none';
       const _t = (window.I18N && window.I18N[window.curLang && window.curLang()]) || (window.I18N && window.I18N.pt) || {};
       const _tree = _t.tree || {};
-      document.getElementById('tPoints').innerHTML = (_tree.pointsPrefix || '⁘ Nuvem esparsa — ') + '<span class="on">' + (ptsObj.geometry.attributes.position.count) + (_tree.unitPoints || ' pontos') + '</span>';
+      const pointCount = ptsObj ? ptsObj.geometry.attributes.position.count : 0;
+      document.getElementById('tPoints').innerHTML = (_tree.pointsPrefix || '⁘ Nuvem esparsa — ') + '<span class="on">' + pointCount + (_tree.unitPoints || ' pontos') + '</span>';
       document.getElementById('tCams').innerHTML = (_tree.camsPrefix || '🎦 Câmeras — ') + '<span class="on">' + cams.length + (_tree.unitPoses || ' poses') + '</span>';
+      document.getElementById('pbCamPath').disabled = cams.length < 2;
+      if (cams.length) window.setCameraPathFrame(0);
     } catch (e) { console.error(e); }
   };
+  // Reabre o sidecar exportado ao lado de um PLY sem precisar reprocessar o vídeo.
+  window.loadCameraPath = async url => {
+    if (!url) return;
+    try {
+      const data = await (await fetch(url)).json();
+      const cams = (data.frames || []).map(f => ({ pos: f.position || f.pos, dir: f.forward || f.dir, up: f.up, name: f.image || '' }))
+        .filter(c => Array.isArray(c.pos) && Array.isArray(c.dir));
+      if (!cams.length) return;
+      previewCams = cams;
+      if (camsObj) scene.remove(camsObj);
+      camsObj = buildCamsObj(cams, null);
+      scene.add(camsObj);
+      document.getElementById('pbCamPath').disabled = cams.length < 2;
+      const _t = (window.I18N && window.I18N[window.curLang && window.curLang()]) || (window.I18N && window.I18N.pt) || {};
+      document.getElementById('tCams').innerHTML = ((_t.tree || {}).camsPrefix || '🎦 Câmeras — ') + '<span class="on">' + cams.length + (((_t.tree || {}).unitPoses) || ' poses') + '</span>';
+    } catch (e) { console.warn('Não foi possível carregar camera_path.json:', e); }
+  };
+  // BUG ANTIGO: `viewVec` negava só o Y — (x, -y, z). Isso é um espelhamento, não
+  // uma rotação: inverte a lateralidade, então a câmera do voo apontava para o
+  // lado errado e nem sequer ficava em cima do trajeto desenhado (que usa
+  // rotation.x = PI, ou seja (x, -y, -z)).
+  // Agora as posições/direções passam pela MESMA matriz de mundo do grupo do
+  // trajeto — o que corrige o espelhamento e, de brinde, faz o voo respeitar
+  // qualquer transformação que o gizmo tenha aplicado nos Gaussians.
+  const rawVec = v => new THREE.Vector3(v[0], v[1], v[2]);
+  const camsMatrix = () => {
+    if (!camsInner) return null;
+    camsInner.updateWorldMatrix(true, false);
+    return camsInner.matrixWorld;
+  };
+  const toWorldPos = v => {
+    const m = camsMatrix();
+    return m ? rawVec(v).applyMatrix4(m) : new THREE.Vector3(v[0], -v[1], -v[2]);
+  };
+  const toWorldDir = v => {
+    const m = camsMatrix();
+    return m ? rawVec(v).transformDirection(m) : new THREE.Vector3(v[0], -v[1], -v[2]).normalize();
+  };
+  window.setCameraPathFrame = u => {
+    if (!previewCams.length) return;
+    const x = Math.max(0, Math.min(1, u)) * (previewCams.length - 1);
+    const a = previewCams[Math.floor(x)], b = previewCams[Math.min(previewCams.length - 1, Math.ceil(x))], t = x - Math.floor(x);
+    const pos = toWorldPos(a.pos).lerp(toWorldPos(b.pos), t);
+    const dir = toWorldDir(a.dir).lerp(toWorldDir(b.dir), t).normalize();
+    const up = toWorldDir(a.up || [0, -1, 0]).lerp(toWorldDir(b.up || [0, -1, 0]), t).normalize();
+    cameraPathFrame = Math.round(x) + 1;
+    camera.position.copy(pos); camera.up.copy(up);
+    target.copy(pos.clone().add(dir)); camera.lookAt(target);
+    const badge = document.getElementById('vpBadge');
+    if (cameraPathPlaying && badge) badge.textContent = `🎥 Câmera virtual ${cameraPathFrame}/${previewCams.length}`;
+  };
+  window.playCameraPath = () => {
+    if (previewCams.length < 2) return;
+    orbiting = false; cameraPathPlaying = !cameraPathPlaying;
+    if (cameraPathPlaying) cameraPathStart = performance.now();
+    document.getElementById('pbCamPath').classList.toggle('sel', cameraPathPlaying);
+  };
+  window.stopCameraPath = () => { cameraPathPlaying = false; document.getElementById('pbCamPath').classList.remove('sel'); };
   window.setPtsVisible = v => { if (ptsObj) ptsObj.visible = v; };
   window.setCamsVisible = v => { if (camsObj) camsObj.visible = v; };
   window.resetView = () => {
@@ -718,7 +950,13 @@
     g.visible = false; g.renderOrder = 999;
     ed.gizmo = g; scene.add(g);
   }
-  function gizmoSync() { if (ed.gizmo && ed.obj) { ed.obj.getWorldPosition(ed.gizmo.position); const s = radius * 0.35; ed.gizmo.scale.set(s, s, s); } }
+  // gizmoSync() é chamado depois de toda alteração de transform (arrasto, undo,
+  // redo, centralizar, escalar), então é o ponto certo para manter o trajeto da
+  // câmera colado nos Gaussians.
+  function gizmoSync() {
+    if (ed.gizmo && ed.obj) { ed.obj.getWorldPosition(ed.gizmo.position); const s = radius * 0.35; ed.gizmo.scale.set(s, s, s); }
+    if (window.__syncCamsToEditor) window.__syncCamsToEditor();
+  }
 
   const ray = new THREE.Raycaster(); const mouseN = new THREE.Vector2();
   function setMouse(e) { const r = canvas.getBoundingClientRect(); mouseN.set(((e.clientX-r.left)/r.width)*2-1, -((e.clientY-r.top)/r.height)*2+1); }
@@ -952,11 +1190,13 @@
       tip: {
         video:'Importar vídeos\nEscolha um ou mais vídeos gravados orbitando a cena.',
         align:'Alinhar Câmeras\nCalcula a posição de cada frame (COLMAP) e mostra a nuvem de pontos + trajeto no viewport. Revise antes de treinar.',
+        colmap:'Abrir COLMAP\nAbre o projeto já alinhado para inspecionar câmeras e nuvem. No COLMAP, use File → Import Model e selecione sparse\\0.',
         start:'Iniciar Treino\nTreina o Gaussian Splatting na sua GPU (Brush). Usa o alinhamento já feito.',
         folder:'Abrir a pasta onde o .ply foi salvo.',
         webedit:'Bruxos WebEDIT\nAbre o seu viewer/editor (efeitos GPU, crop, animação de câmera, gravação) com o splat atual.',
         super:'SuperSplat\nAbre o editor SuperSplat completo com seu splat carregado (gizmo, seleções, undo/redo).',
         out:'Pasta de saída\nOnde os .ply serão salvos (padrão: Documentos\\BruxoSplat).',
+        copyLog:'Copiar log\nCopia todo o log para você colar aqui e receber ajuda.',
         lang:'Idioma / Language',
         orbit:'Orbitar',
         tglPoints:'Mostrar/ocultar a nuvem de pontos do alinhamento.',
@@ -976,6 +1216,7 @@
         mGS:'Modo Gaussians\nRender splat real (mesma engine do WebEDIT). Aplica suas edições antes de renderizar.',
         mMesh:'Modo Mesh\nGera uma malha 3D real a partir dos pontos mantidos (voxeliza e desenha só as faces externas). Ajuste resolução/densidade em Parâmetros → Mesh.',
         pbPlay:'Órbita automática (turntable)\nGira a câmera ao redor da cena.',
+        pbCamPath:'Reproduzir trajetória da câmera\nMostra o ângulo, direção e movimento calculados pelo alinhamento (especialmente útil no DPVO).',
         pbStop:'Parar a órbita.', pbSlow:'Mais devagar.', pbFast:'Mais rápido.',
         t4dPlay:'Tocar/pausar a sequência 4D\nPercorre os frames importados da pasta.',
         t4dExportSeq:'Exportar sequência\nCopia todos os frames (.ply/.splat/.ksplat) pra uma pasta que você escolher.',
@@ -989,6 +1230,7 @@
       view: { free:'🎥 Câmera livre', front:'Frente (F4)', top:'Topo (F2)', right:'Direita (F3)', left:'Esquerda', back:'Trás', bottom:'Baixo' },
       btn: { backEd:'← Voltar ao editor' },
       tab: { scene:'Cena', params:'Parâmetros', ia:'Modos IA', log:'Log' },
+      ui: { copyLog:'📋 Copiar log', logCopied:'✅ Log copiado', saveProject:'💾 Salvar projeto', openProject:'📂 Abrir projeto' },
       tree: {
         scene:'📁 Cena', videosNone:'🎞 Vídeos — <i>nenhum</i>', pointsDash:'⁘ Nuvem esparsa — <i>—</i>',
         camsDash:'🎦 Câmeras — <i>—</i>', splatNotGen:'✨ Splat — <i>não gerado</i>',
@@ -997,20 +1239,35 @@
       },
       progress: { title:'Progresso', setup:'Ferramentas (ffmpeg · COLMAP · Brush)', frames:'Extração de frames', colmap:'Reconstrução de câmeras', train:'Treino 3DGS (GPU)' },
       params: {
-        videosGroup:'Vídeos', addVideo:'＋ Adicionar vídeo', hint:'Início/Fim: hh:mm:ss (vazio = vídeo todo) · Intervalo: segundos entre fotos',
-        trainGroup:'Treino', quality:'Qualidade (passos)',
+        videosGroup:'Vídeos', addVideo:'＋ Adicionar vídeo', hint:'Início/Fim: hh:mm:ss (vazio = vídeo todo) · FPS: frames extraídos por segundo', equirectHint:'360/equiretangular: selecione o tipo no vídeo. O app cria 4 câmeras virtuais antes do COLMAP.',
+        trainGroup:'Treino', trainingEngine:'Motor de treino', ppispHint:'PPISP corrige exposição, vinheta e cor entre frames. Requer GPU NVIDIA, CUDA Toolkit e Visual Studio Build Tools; instala um ambiente isolado na primeira vez.', quality:'Qualidade (passos)',
         frameExtraction:'Extração de frames', maxRes:'Resolução máxima (lado maior, px)',
+        maxResHint:'Resolução dos frames usados no treino — é o que mais define a nitidez dos Gaussians. 2.5K/4K exigem bem mais VRAM e tempo: se der falta de memória, baixe o FPS de extração (menos frames) antes de baixar a resolução.',
+        colmapPreset:'Qualidade do alinhamento (COLMAP)',
+        colmapPresetHint:'"Automático" usa o modo atual do COLMAP e não muda nada. As outras opções trocam para o pipeline em etapas (extração → matching → mapper), com mais keypoints e verificação guiada — melhora o alinhamento em cenas com textura fina, ao custo de tempo. Mantenha em "Automático" enquanto estiver comparando resultados de treino.',
+        cmFeatures:'Máx. features por imagem', cmPeak:'Peak threshold (sensibilidade)', cmMatcher:'Matching',
+        cmGuided:'Guided matching (usa a geometria para achar mais correspondências)',
+        cmLoop:'Loop detection (vídeo que dá a volta e volta ao início) — baixa ~250 MB na 1ª vez',
+        cmAffine:'Affine shape (câmeras inclinadas/drone) — força CPU, bem mais lento',
+        cmDsp:'DSP-SIFT (mudanças de escala e borrão de vídeo) — força CPU, bem mais lento',
+        cmBA:'Bundle adjustment completo (refina focal, ponto principal e distorção)',
+        cmMinMatches:'Mínimo de correspondências', cmTriAngle:'Ângulo mínimo de triangulação (°)',
+        cmCustomHint:'Affine shape e DSP-SIFT não têm implementação em GPU no COLMAP: ligar qualquer um dos dois joga a extração de features para a CPU, o que pode multiplicar o tempo dessa etapa por várias vezes. Valem a pena em cenas difíceis, não como padrão.',
+        lpips:'Nitidez extra (perceptual)', lpipsHint:'Ativa a perda perceptual LPIPS no motor Brush: compara as imagens pelo que o olho percebe, não pixel a pixel. Costuma dar um salto de nitidez percebida em textura fina, mas deixa o treino mais lento. Só no motor Brush em desktop. Deixe desligada ao comparar resultados — ela muda a métrica e contamina o teste.',
         alignGroup:'Alinhamento de câmera', alignMethod:'Método',
-        alignHint:'DPVO é bem mais rápido em vídeos longos, mas a calibração da câmera é aproximada (sem EXIF) e a nuvem de pontos inicial é mais esparsa que a do COLMAP.',
+        dpvoMaxRes:'Resolução DPVO (lado maior, px)', dpvoResHint:'No modo DPVO, esta é também a resolução dos frames usados no treino. Para textura máxima, use COLMAP com 1600/1920 px.',
+        dpvoFov:'Campo de visão da câmera (DPVO)', dpvoFovHint:'DPVO não lê o FOV real do EXIF do vídeo — ele assume esse valor pra calcular a distância focal. Se a câmera/trajetória aparecerem "erradas" (escala ou proporção não batendo com o vídeo gravado), o valor errado aqui costuma ser a causa: ajuste pro campo de visão real da câmera que gravou.',
+        alignHint:'DPVO direto usa o pacote local CEB (Python + Torch/CUDA isolados), sem Docker e sem alterar os outros motores. É mais rápido em vídeos longos, mas a calibração é aproximada (sem EXIF) e a nuvem inicial é mais esparsa que a do COLMAP.', mast3rLicense:'* MASt3R e seus pesos: licença CC BY-NC-SA 4.0 — uso não comercial. Verifique a licença antes de uso ou distribuição comercial.',
         editorGroup:'Editor', splatScale:'Escala do splat', compact:'Salvar compacto (remove harmônicos — ~4× menor)', cleanupOpac:'Limpeza: opacidade mínima (%)',
         toolsHint:'Ferramentas na barra esquerda: mover, girar, selecionar (arraste na tela), excluir, crop, centralizar, limpar, salvar.',
         viewportGroup:'Viewport', pointCloud:'Nuvem de pontos', cameraPath:'Trajeto da câmera',
         meshGroup:'Mesh', meshRes:'Resolução do voxel', meshDensity:'Densidade mínima por voxel',
         meshHint:'Gera uma malha 3D a partir dos pontos mantidos (respeita crop/exclusão/limpeza já feitos). Clique no botão Mesh na barra do viewport.',
         outputGroup:'Saída', chooseFolder:'Escolher pasta…', outputDefault:'Padrão: Documentos\\BruxoSplat',
-        startBtn:'⚙️ Iniciar Treino'
+        startBtn:'⚙️ Iniciar Treino', customStepsPlaceholder:'Número de passos'
       },
-      opt: { draft:'Rascunho — 7k (rápido)', medium:'Média — 15k', high:'Alta — 30k', max:'Máxima — 50k (lento)', alignColmap:'COLMAP (padrão)', alignDpvo:'DPVO — foco em movimento de câmera (experimental, requer Docker + GPU NVIDIA)', t4dStream:'Stream (leve)', t4dGpu:'GPU (fluido)' },
+      opt: { cmAuto:'Automático (atual, seguro)', cmHigh:'Alta — mais features + guided matching', cmMax:'Máxima — DSP-SIFT + affine (bem lento, CPU)', cmCustom:'Personalizado…', cmSeq:'Sequencial (vídeo — recomendado)', cmExh:'Exaustivo (fotos sem ordem, poucas imagens)', cmVocab:'Vocabulary tree (centenas de imagens sem ordem)',
+        lpipsOff:'Desligada (padrão)', lpipsLow:'Leve', lpipsMed:'Média', lpipsHigh:'Forte', draft:'Rascunho — 7k (rápido)', medium:'Média — 15k', high:'Alta — 30k', max:'Máxima — 50k (lento)', ultra:'Ultra — 75k (bem lento)', extreme:'Extreme — 100k (muito lento)', customSteps:'Custom — escolher valor', engineBrush:'Brush — compatível (padrão)', enginePpisp:'GSplat + PPISP — NVIDIA/CUDA (experimental)', alignColmap:'COLMAP (padrão)', alignDpvo:'DPVO direto — câmera rápida (pacote local CEB)', alignMast3r:'MASt3R — IA para cenas difíceis (experimental, uso não comercial*)', alignMegaSam:'MegaSam — câmera + profundidade para cenas dinâmicas (experimental)', t4dStream:'Stream (leve)', t4dGpu:'GPU (fluido)' },
       ia: {
         photoGroup:'Foto → 3D (SHARP)', photoHint:'Uma única foto vira um splat 3D em segundos (Apple SHARP). Instala ~2 GB na primeira vez.',
         installSharp:'⬇ Instalar SHARP', runSharp:'📷 Escolher foto e gerar',
@@ -1025,7 +1282,7 @@
       },
       status: { ready:'Pronto' },
       mouseHint:'LMB orbita · roda aproxima · RMB desloca',
-      row: { start:'início', end:'fim', interval:'interv. s', videoSuffix:' vídeo(s)' },
+      row: { start:'início', end:'fim', fps:'FPS', projection:'tipo', normal:'Vídeo comum', equirect:'360 equiretangular', videoSuffix:' vídeo(s)' },
       stage: { setup:'Preparando ferramentas', frames:'Extraindo frames', colmap:'Reconstruindo câmeras', train:'Treinando 3DGS' },
       msg: {
         processing:'Processando…', readyToTrain:'Câmeras alinhadas ✅ — pronto para treinar',
@@ -1059,11 +1316,13 @@
       tip: {
         video:'Import videos\nChoose one or more videos recorded orbiting the scene.',
         align:'Align Cameras\nComputes the position of each frame (COLMAP) and shows the point cloud + camera path in the viewport. Review before training.',
+        colmap:'Open COLMAP\nOpens the aligned project to inspect cameras and the point cloud. In COLMAP, use File → Import Model and select sparse\\0.',
         start:'Start Training\nTrains the Gaussian Splat on your GPU (Brush). Uses the alignment already done.',
         folder:'Open the folder where the .ply was saved.',
         webedit:'Bruxos WebEDIT\nOpens your viewer/editor (GPU effects, crop, camera animation, recording) with the current splat.',
         super:'SuperSplat\nOpens the full SuperSplat editor with your splat loaded (gizmo, selections, undo/redo).',
         out:'Output folder\nWhere the .ply files will be saved (default: Documents\\BruxoSplat).',
+        copyLog:'Copy log\nCopies the complete log so you can paste it here for help.',
         lang:'Idioma / Language',
         orbit:'Orbit',
         tglPoints:'Show/hide the alignment point cloud.',
@@ -1083,6 +1342,7 @@
         mGS:'Gaussians Mode\nReal splat render (same engine as WebEDIT). Applies your edits before rendering.',
         mMesh:'Mesh Mode\nGenerates a real 3D mesh from the kept points (voxelizes and draws only the outer faces). Adjust resolution/density in Parameters → Mesh.',
         pbPlay:'Auto orbit (turntable)\nRotates the camera around the scene.',
+        pbCamPath:'Play camera trajectory\nShows the angle, direction, and motion computed by alignment (especially useful with DPVO).',
         pbStop:'Stop the orbit.', pbSlow:'Slower.', pbFast:'Faster.',
         t4dPlay:'Play/pause the 4D sequence\nSteps through the frames imported from the folder.',
         t4dExportSeq:'Export sequence\nCopies every frame (.ply/.splat/.ksplat) to a folder you choose.',
@@ -1096,6 +1356,7 @@
       view: { free:'🎥 Free camera', front:'Front (F4)', top:'Top (F2)', right:'Right (F3)', left:'Left', back:'Back', bottom:'Bottom' },
       btn: { backEd:'← Back to editor' },
       tab: { scene:'Scene', params:'Parameters', ia:'AI Modes', log:'Log' },
+      ui: { copyLog:'📋 Copy log', logCopied:'✅ Log copied', saveProject:'💾 Save project', openProject:'📂 Open project' },
       tree: {
         scene:'📁 Scene', videosNone:'🎞 Videos — <i>none</i>', pointsDash:'⁘ Sparse cloud — <i>—</i>',
         camsDash:'🎦 Cameras — <i>—</i>', splatNotGen:'✨ Splat — <i>not generated</i>',
@@ -1104,20 +1365,35 @@
       },
       progress: { title:'Progress', setup:'Tools (ffmpeg · COLMAP · Brush)', frames:'Frame extraction', colmap:'Camera reconstruction', train:'3DGS Training (GPU)' },
       params: {
-        videosGroup:'Videos', addVideo:'＋ Add video', hint:'Start/End: hh:mm:ss (empty = whole video) · Interval: seconds between frames',
-        trainGroup:'Training', quality:'Quality (steps)',
+        videosGroup:'Videos', addVideo:'＋ Add video', hint:'Start/End: hh:mm:ss (empty = whole video) · FPS: frames extracted per second', equirectHint:'360/equirectangular: choose the type on the video. The app creates 4 virtual cameras before COLMAP.',
+        trainGroup:'Training', trainingEngine:'Training engine', ppispHint:'PPISP corrects exposure, vignetting, and color between frames. Requires an NVIDIA GPU, CUDA Toolkit, and Visual Studio Build Tools; it installs an isolated environment the first time.', quality:'Quality (steps)',
         frameExtraction:'Frame extraction', maxRes:'Max resolution (longer side, px)',
+        maxResHint:'Resolution of the frames used for training — the single biggest factor in Gaussian sharpness. 2.5K/4K need far more VRAM and time: if you run out of memory, lower the extraction FPS (fewer frames) before lowering the resolution.',
+        colmapPreset:'Alignment quality (COLMAP)',
+        colmapPresetHint:'"Automatic" keeps the current COLMAP mode and changes nothing. The other options switch to the staged pipeline (extraction → matching → mapper) with more keypoints and guided verification — better alignment on fine-textured scenes, at the cost of time. Keep it on "Automatic" while comparing training results.',
+        cmFeatures:'Max features per image', cmPeak:'Peak threshold (sensitivity)', cmMatcher:'Matching',
+        cmGuided:'Guided matching (uses geometry to find more correspondences)',
+        cmLoop:'Loop detection (video that goes around and returns to the start) — downloads ~250 MB the first time',
+        cmAffine:'Affine shape (tilted cameras/drone) — forces CPU, much slower',
+        cmDsp:'DSP-SIFT (scale changes and video blur) — forces CPU, much slower',
+        cmBA:'Full bundle adjustment (refines focal, principal point and distortion)',
+        cmMinMatches:'Minimum number of matches', cmTriAngle:'Minimum triangulation angle (°)',
+        cmCustomHint:'Affine shape and DSP-SIFT have no GPU implementation in COLMAP: enabling either one pushes feature extraction to the CPU, which can multiply the time of that stage several times over. Worth it on difficult scenes, not as a default.',
+        lpips:'Extra sharpness (perceptual)', lpipsHint:'Enables the LPIPS perceptual loss in the Brush engine: it compares images by what the eye perceives rather than pixel by pixel. Usually gives a noticeable jump in perceived sharpness on fine texture, but makes training slower. Brush engine on desktop only. Keep it off while comparing results — it changes the metric and contaminates the test.',
         alignGroup:'Camera alignment', alignMethod:'Method',
-        alignHint:'DPVO is much faster on long videos, but the camera calibration is approximate (no EXIF) and the initial point cloud is sparser than COLMAP\'s.',
+        dpvoMaxRes:'DPVO resolution (long side, px)', dpvoResHint:'In DPVO mode, this is also the frame resolution used for training. For maximum texture, use COLMAP at 1600/1920 px.',
+        dpvoFov:'Camera field of view (DPVO)', dpvoFovHint:'DPVO does not read the real FOV from the video\'s EXIF — it assumes this value to compute the focal length. If the camera/trajectory look "wrong" (scale or proportion not matching the recorded video), a wrong value here is usually the cause: set it to the real field of view of the camera that recorded the footage.',
+        alignHint:'Direct DPVO uses the local CEB package (isolated Python + Torch/CUDA), without Docker and without changing the other engines. It is much faster on long videos, but calibration is approximate (no EXIF) and the initial cloud is sparser than COLMAP\'s.', mast3rLicense:'* MASt3R and its weights are licensed CC BY-NC-SA 4.0 — non-commercial use. Check the license before commercial use or distribution.',
         editorGroup:'Editor', splatScale:'Splat scale', compact:'Save compact (removes harmonics — ~4× smaller)', cleanupOpac:'Cleanup: minimum opacity (%)',
         toolsHint:'Tools on the left bar: move, rotate, select (drag on screen), delete, crop, center, cleanup, save.',
         viewportGroup:'Viewport', pointCloud:'Point cloud', cameraPath:'Camera path',
         meshGroup:'Mesh', meshRes:'Voxel resolution', meshDensity:'Minimum density per voxel',
         meshHint:'Generates a 3D mesh from the kept points (respects crop/deletion/cleanup already done). Click the Mesh button in the viewport bar.',
         outputGroup:'Output', chooseFolder:'Choose folder…', outputDefault:'Default: Documents\\BruxoSplat',
-        startBtn:'⚙️ Start Training'
+        startBtn:'⚙️ Start Training', customStepsPlaceholder:'Number of steps'
       },
-      opt: { draft:'Draft — 7k (fast)', medium:'Medium — 15k', high:'High — 30k', max:'Maximum — 50k (slow)', alignColmap:'COLMAP (default)', alignDpvo:'DPVO — camera-motion focused (experimental, requires Docker + NVIDIA GPU)', t4dStream:'Stream (light)', t4dGpu:'GPU (smooth)' },
+      opt: { cmAuto:'Automatic (current, safe)', cmHigh:'High — more features + guided matching', cmMax:'Maximum — DSP-SIFT + affine (very slow, CPU)', cmCustom:'Custom…', cmSeq:'Sequential (video — recommended)', cmExh:'Exhaustive (unordered photos, few images)', cmVocab:'Vocabulary tree (hundreds of unordered images)',
+        lpipsOff:'Off (default)', lpipsLow:'Light', lpipsMed:'Medium', lpipsHigh:'Strong', draft:'Draft — 7k (fast)', medium:'Medium — 15k', high:'High — 30k', max:'Maximum — 50k (slow)', ultra:'Ultra — 75k (very slow)', extreme:'Extreme — 100k (extremely slow)', customSteps:'Custom — pick a value', engineBrush:'Brush — compatible (default)', enginePpisp:'GSplat + PPISP — NVIDIA/CUDA (experimental)', alignColmap:'COLMAP (default)', alignDpvo:'Direct DPVO — fast camera tracking (local CEB package)', alignMast3r:'MASt3R — AI for difficult scenes (experimental, non-commercial*)', alignMegaSam:'MegaSam — camera + depth for dynamic scenes (experimental)', t4dStream:'Stream (light)', t4dGpu:'GPU (smooth)' },
       ia: {
         photoGroup:'Photo → 3D (SHARP)', photoHint:'A single photo becomes a 3D splat in seconds (Apple SHARP). Installs ~2 GB the first time.',
         installSharp:'⬇ Install SHARP', runSharp:'📷 Choose photo and generate',
@@ -1132,7 +1408,7 @@
       },
       status: { ready:'Ready' },
       mouseHint:'LMB orbit · wheel zoom · RMB pan',
-      row: { start:'start', end:'end', interval:'interval s', videoSuffix:' video(s)' },
+      row: { start:'start', end:'end', fps:'FPS', projection:'type', normal:'Normal video', equirect:'360 equirectangular', videoSuffix:' video(s)' },
       stage: { setup:'Preparing tools', frames:'Extracting frames', colmap:'Reconstructing cameras', train:'Training 3DGS' },
       msg: {
         processing:'Processing…', readyToTrain:'Cameras aligned ✅ — ready to train',
@@ -1179,15 +1455,28 @@
       const v = deepGet(dict, el.dataset.i18nTip);
       if (v != null) el.setAttribute('data-tip', v);
     });
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+      const v = deepGet(dict, el.dataset.i18nPlaceholder);
+      if (v != null) el.setAttribute('placeholder', v);
+    });
     $('langLbl').textContent = lang === 'pt' ? 'PT-BR' : 'ENG';
+    $('btnAbort').title = $('btnAbort').ariaLabel = lang === 'en' ? 'Abort processing' : 'Abortar processamento';
     renderVideos();
     if (!running) $('sbState').textContent = dict.status.ready;
     try { localStorage.setItem('bruxoLang', lang); } catch (e) {}
     if (window.bruxo && window.bruxo.setLang) window.bruxo.setLang(lang);
+    if (typeof updateTrainingEngineHint === 'function') updateTrainingEngineHint();
+    // translate() reescreve o texto de todo [data-i18n], o que apaga o aviso de
+    // "requer GPU NVIDIA" nas opções desabilitadas. Reaplicamos aqui (limpando o
+    // marcador, senão o sufixo não seria re-adicionado no idioma novo).
+    if (typeof window.__disableCudaOnlyFeatures === 'function') {
+      document.querySelectorAll('option[data-cuda-note]').forEach(o => delete o.dataset.cudaNote);
+      window.__disableCudaOnlyFeatures();
+    }
   }
   $('btnLang').onclick = () => translate(curLang === 'pt' ? 'en' : 'pt');
 
-  let videos = [], outDir = null, lastPly = null, running = false, aligned = false;
+  let videos = [], outDir = null, lastPly = null, lastCameraPathUrl = null, running = false, aligned = false;
   const order = ['setup','frames','colmap','train'];
 
   document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
@@ -1206,6 +1495,21 @@
     } else el.textContent += l + '\n';
     el.scrollTop = el.scrollHeight;
   };
+  document.querySelectorAll('[data-copy-log]').forEach(copyButton => copyButton.onclick = async () => {
+    const text = $('log').textContent;
+    if (!text.trim()) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Fallback para instalações Electron onde a Clipboard API não está exposta.
+      const area = document.createElement('textarea');
+      area.value = text; area.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+      document.body.appendChild(area); area.select(); document.execCommand('copy'); area.remove();
+    }
+    const button = $('btnCopyLog');
+    button.textContent = (I18N[curLang] || I18N.pt).ui.logCopied;
+    setTimeout(() => { button.textContent = (I18N[curLang] || I18N.pt).ui.copyLog; }, 1600);
+  });
   const setStage = (s, cls) => { $('st-' + s).className = 'stage ' + cls; };
   const enableStart = v => { $('btnStart').disabled = $('btnStart2').disabled = $('btnAlign').disabled = !v; };
 
@@ -1224,11 +1528,12 @@
         '<div style="display:flex;gap:4px;margin-top:4px">' +
         '<input data-f="start" data-i="' + i + '" placeholder="' + t.row.start + '" value="' + v.start + '" style="width:33%">' +
         '<input data-f="end" data-i="' + i + '" placeholder="' + t.row.end + '" value="' + v.end + '" style="width:33%">' +
-        '<input data-f="interval" data-i="' + i + '" placeholder="' + t.row.interval + '" value="' + v.interval + '" style="width:33%"></div>';
+        '<input data-f="fps" data-i="' + i + '" placeholder="' + t.row.fps + '" value="' + (v.fps || (v.interval ? String(1 / parseFloat(v.interval)) : '2')) + '" style="width:33%"></div>' +
+        '<select data-f="projection" data-i="' + i + '" style="width:100%;margin-top:4px"><option value="flat"' + ((v.projection || 'flat') === 'flat' ? ' selected' : '') + '>' + t.row.normal + '</option><option value="equirect"' + (v.projection === 'equirect' ? ' selected' : '') + '>' + t.row.equirect + '</option></select>';
       el.appendChild(row);
     });
     el.querySelectorAll('[data-del]').forEach(x => x.onclick = () => { videos.splice(+x.dataset.del, 1); refreshVideos(); });
-    el.querySelectorAll('input').forEach(x => x.onchange = () => { videos[+x.dataset.i][x.dataset.f] = x.value; aligned = false; });
+    el.querySelectorAll('[data-f]').forEach(x => x.onchange = () => { videos[+x.dataset.i][x.dataset.f] = x.value; aligned = false; });
     $('tVideo').innerHTML = t.tree.videosPrefix + (videos.length ? '<span class="on">' + videos.length + '</span>' : deepGet(t, 'tree.videosNone').split('— ')[1]);
     $('sbVideo').textContent = videos.length ? videos.length + t.row.videoSuffix : '';
     enableStart(videos.length > 0);
@@ -1236,24 +1541,112 @@
   function refreshVideos() { aligned = false; renderVideos(); }
   async function addVideos() {
     const vs = await window.bruxo.pickVideo();
-    if (vs) { vs.forEach(v => videos.push({ path: v, start: '', end: '', interval: '0.5' })); refreshVideos(); }
+    if (vs) { vs.forEach(v => videos.push({ path: v, start: '', end: '', fps: '2', projection: 'flat' })); refreshVideos(); }
   }
   $('btnVideo').onclick = $('btnAddVideo').onclick = addVideos;
   $('btnOut').onclick = $('btnOut2').onclick = async () => {
     outDir = await window.bruxo.pickOutDir();
     if (outDir) $('outPath').textContent = outDir;
   };
-  const opts = () => ({ videos, outDir, steps: +$('steps').value, maxSize: +$('maxSize').value, alignMethod: $('alignMethod').value });
+  const opts = () => ({ videos, outDir, steps: $('steps').value === 'custom' ? Math.max(1000, +$('stepsCustom').value || 30000) : +$('steps').value, maxSize: +$('maxSize').value, dpvoMaxSize: +$('dpvoMaxSize').value, dpvoFov: +$('dpvoFov').value, lpips: +$('lpips').value, alignMethod: $('alignMethod').value, trainingEngine: $('trainingEngine').value, colmap: colmapOpts() });
+
+  // Traduz o preset de alinhamento escolhido num objeto de parâmetros do COLMAP.
+  // "auto" devolve null → o pipeline mantém o automatic_reconstructor de sempre.
+  function colmapOpts() {
+    const preset = $('colmapPreset').value;
+    if (preset === 'auto') return null;
+    if (preset === 'high') return { preset, features: 16384, peak: 0.003, matcher: 'sequential', guided: true, loop: false, affine: false, dsp: false, ba: true, minMatches: 15, triAngle: 1.5 };
+    // "Máxima" liga loop detection: é o preset de quem aceita esperar, e sem ele
+    // um vídeo que dá a volta nunca fecha o laço por melhor que seja o resto.
+    if (preset === 'max') return { preset, features: 32768, peak: 0.002, matcher: 'sequential', guided: true, loop: true, affine: true, dsp: true, ba: true, minMatches: 15, triAngle: 1.5 };
+    return { preset, features: +$('cmFeatures').value, peak: +$('cmPeak').value, matcher: $('cmMatcher').value,
+      guided: $('cmGuided').checked, loop: $('cmLoop').checked, affine: $('cmAffine').checked, dsp: $('cmDsp').checked,
+      ba: $('cmBA').checked, minMatches: +$('cmMinMatches').value, triAngle: +$('cmTriAngle').value };
+  }
+  const updateStepsCustomVisibility = () => {
+    $('stepsCustom').style.display = $('steps').value === 'custom' ? 'block' : 'none';
+  };
+  $('steps').onchange = updateStepsCustomVisibility;
+
+  // ── Recursos que exigem CUDA/NVIDIA ────────────────────────────────────────
+  // No macOS não existe CUDA, e todos esses motores lançam erro explícito no
+  // backend. Em vez de deixar o usuário escolher e só descobrir na hora do erro,
+  // desabilitamos a opção e explicamos o porquê no próprio rótulo.
+  function disableCudaOnlyFeatures() {
+    if (!window.bruxo || window.bruxo.platform !== 'darwin') return;
+    const en = curLang === 'en';
+    const why = en ? ' — needs an NVIDIA GPU (unavailable on macOS)' : ' — requer GPU NVIDIA (indisponível no macOS)';
+
+    // Selects: desabilita as opções e garante que a seleção atual não fique numa opção morta.
+    const deadOptions = { trainingEngine: ['ppisp', '3dgrut'], alignMethod: ['dpvo', 'mast3r', 'megasam'] };
+    for (const [selectId, values] of Object.entries(deadOptions)) {
+      const sel = $(selectId); if (!sel) continue;
+      for (const v of values) {
+        const opt = sel.querySelector(`option[value="${v}"]`);
+        if (!opt) continue;
+        opt.disabled = true;
+        if (!opt.dataset.cudaNote) { opt.textContent += why; opt.dataset.cudaNote = '1'; }
+      }
+      if (values.includes(sel.value)) { sel.value = selectId === 'trainingEngine' ? 'brush' : 'colmap'; sel.dispatchEvent(new Event('change')); }
+    }
+
+    // Botões da aba IA. O SHARP é da própria Apple e roda no Mac, então fica de fora.
+    const deadButtons = ['iaInstallTripo', 'iaRunTripo', 'iaInstallFace', 'iaRunFace', 'iaInstallZip', 'iaRunZipImage', 'iaRunZipVideo'];
+    for (const id of deadButtons) {
+      const b = $(id); if (!b) continue;
+      b.disabled = true;
+      b.title = (en ? 'Unavailable on macOS: requires an NVIDIA GPU with CUDA.' : 'Indisponível no macOS: requer GPU NVIDIA com CUDA.');
+    }
+  }
+  disableCudaOnlyFeatures();
+  window.__disableCudaOnlyFeatures = disableCudaOnlyFeatures;
+  const updateColmapCustomVisibility = () => {
+    $('cmCustomBox').style.display = $('colmapPreset').value === 'custom' ? 'block' : 'none';
+  };
+  $('colmapPreset').onchange = updateColmapCustomVisibility;
+  updateColmapCustomVisibility();
+  const updateTrainingEngineHint = () => {
+    const engine = $('trainingEngine').value;
+    const isEn = curLang === 'en';
+    const hint = engine === '3dgrut'
+      ? (isEn
+        ? '3DGRUT runs the NVIDIA 3DGRT ray-tracing backend. It needs an RTX/NVIDIA GPU, CUDA Toolkit and Visual Studio Build Tools. Its own uv environment is installed only on first use; PLY opens in the editor and USDZ is saved beside it.'
+        : '3DGRUT usa o backend 3DGRT de ray tracing da NVIDIA. Requer GPU RTX/NVIDIA, CUDA Toolkit e Visual Studio Build Tools. O ambiente uv próprio é instalado somente na primeira vez; o PLY abre no editor e o USDZ é salvo ao lado dele.')
+      : (I18N[curLang] || I18N.pt).params.ppispHint;
+    $('trainingEngineHint').textContent = engine === 'brush'
+      ? (isEn ? 'Brush is the compatible default engine and does not install an experimental NVIDIA environment.' : 'Brush é o motor compatível padrão e não instala um ambiente NVIDIA experimental.')
+      : hint;
+  };
+  $('trainingEngine').onchange = updateTrainingEngineHint;
   const begin = () => {
     running = true; enableStart(false);
     $('log').textContent = ''; order.forEach(s => setStage(s, ''));
+    resetLossChart();
     $('statusOverlay').style.display = 'block';
+    $('btnAbort').disabled = false;
     $('viewer').style.display = 'none'; $('glcanvas').style.display = 'block';
     $('sbState').textContent = I18N[curLang].msg.processing;
   };
   $('btnAlign').onclick = () => { if (!running && videos.length) { begin(); window.bruxo.align(opts()); } };
+  $('btnColmap').onclick = () => window.bruxo.openColmap();
   const start = () => { if (!running && videos.length) { begin(); window.bruxo.train({ ...opts(), forceAlign: !aligned }); } };
   $('btnStart').onclick = $('btnStart2').onclick = start;
+  $('btnSaveProject').onclick = async () => {
+    const r = await window.bruxo.saveProject();
+    if (r && r.ok) log((curLang === 'en' ? '💾 Project saved: ' : '💾 Projeto salvo: ') + r.path);
+  };
+  $('btnOpenProject').onclick = () => window.bruxo.openProject();
+  $('btnAbort').onclick = async () => {
+    if (!running) return;
+    $('btnAbort').disabled = true;
+    const en = curLang === 'en';
+    $('stageLine').textContent = en ? 'Abort requested — stopping the current process…' : 'Abortamento solicitado — encerrando o processo atual…';
+    const r = await window.bruxo.abortWork();
+    if (!r || !r.ok) {
+      $('btnAbort').disabled = false;
+      log((en ? '⚠ Nothing active to abort yet.' : '⚠ Ainda não há um processo ativo para abortar.'));
+    }
+  };
   $('btnFolder').onclick = () => lastPly && window.bruxo.openFolder(lastPly);
   let lastViewerUrl = null;
   $('tMove').onclick = () => window.setEditMode('move');
@@ -1273,7 +1666,7 @@
     const buf = await window.edSave();
     if (!buf) return;
     const r = await window.bruxo.savePly(buf); // main.js gera BruxoSplat_0001.ply, _0002.ply...
-    lastPly = r.path; lastViewerUrl = r.viewerUrl;
+    lastPly = r.path; lastViewerUrl = r.viewerUrl; lastCameraPathUrl = r.cameraPath || lastCameraPathUrl;
     $('sbPly').textContent = r.path.split(/[\\\/]/).pop();
     log(I18N[curLang].msg.savedFileLog + r.path);
   };
@@ -1330,6 +1723,8 @@
     if (window.currentRawUrl) return { url: window.currentRawUrl, format: window.currentFileFormat };
     return null;
   }
+  // O sidecar .camera.json acompanha o splat até o WebEDIT, sem alterar o PLY.
+  const withCameraPath = url => !lastCameraPathUrl ? url : url + (url.includes('?') ? '&' : '?') + 'camera=' + encodeURIComponent(lastCameraPathUrl);
   const openWebEdit = async () => {
     // nada importado ainda: abre o diálogo de importação direto e, assim que escolher o arquivo,
     // manda pro WebEDIT sem passar por nenhuma outra tela.
@@ -1350,7 +1745,7 @@
       const urls = [];
       for (let i = 0; i < seq4d.count; i++) urls.push(encodeURIComponent(seq4d.base + '/seq4d/' + i + '?v=' + v));
       const fmts = seq4d.formats.join(',');
-      showWeb(seq4d.base + '/webedit/index.html?seq=' + urls.join(',') + '&fmt=' + fmts, 'webedit');
+      showWeb(withCameraPath(seq4d.base + '/webedit/index.html?seq=' + urls.join(',') + '&fmt=' + fmts), 'webedit');
       return;
     }
     if (window.currentFileFormat !== 'ply') {
@@ -1362,10 +1757,10 @@
       // iframe direto pro arquivo bruto faz o navegador tentar baixá-lo (daí o "salvar como") em vez
       // de renderizar dentro do visualizador.
       const base = lastViewerUrl.split('/webedit/')[0];
-      showWeb(base + '/webedit/index.html?url=' + busted, 'webedit');
+      showWeb(withCameraPath(base + '/webedit/index.html?url=' + busted), 'webedit');
       return;
     }
-    const u = await syncEdits(); if (u) showWeb(u + '&t=' + Date.now(), 'webedit');
+    const u = await syncEdits(); if (u) showWeb(withCameraPath(u + '&t=' + Date.now()), 'webedit');
   };
   const setModeBtns = m => {
     ['mPoints','mGS','mMesh'].forEach(id => $(id).classList.remove('sel'));
@@ -1587,6 +1982,9 @@
   };
   $('iaInstallSharp').onclick = () => { $('statusOverlay').style.display='block'; window.bruxo.modelInstall('sharp'); };
   $('iaInstallTripo').onclick = () => { $('statusOverlay').style.display='block'; window.bruxo.modelInstall('triposplat'); };
+  $('iaInstallZip').onclick = () => { $('statusOverlay').style.display='block'; window.bruxo.modelInstall('zipsplat'); };
+  $('iaRunZipImage').onclick = () => iaRun('zipsplat', window.bruxo.pickImage);
+  $('iaRunZipVideo').onclick = () => iaRun('zipsplat', async () => { const v = await window.bruxo.pickVideo(); return v && v[0]; });
   $('iaRunSharp').onclick = () => iaRun('sharp', window.bruxo.pickImage);
   $('iaRunTripo').onclick = () => iaRun('triposplat', window.bruxo.pickImage);
   $('iaRunSharp4d').onclick = async () => {
@@ -1614,8 +2012,9 @@
     if (e.ctrlKey && e.key.toLowerCase() === 'z') { e.shiftKey ? window.edRedo() : window.edUndo(); }
   });
   $('viewSel').onchange = () => { if ($('viewSel').value !== 'free') window.setView($('viewSel').value); };
-  $('pbPlay').onclick = () => window.setOrbit(true);
-  $('pbStop').onclick = () => window.setOrbit(false);
+  $('pbPlay').onclick = () => { window.stopCameraPath(); window.setOrbit(true); };
+  $('pbCamPath').onclick = () => window.playCameraPath();
+  $('pbStop').onclick = () => { window.setOrbit(false); window.stopCameraPath(); };
   $('pbSlow').onclick = () => window.orbitFaster(0.7);
   $('pbFast').onclick = () => window.orbitFaster(1.4);
   // move controles do viewport para a barra fixa (fora do view)
@@ -1629,7 +2028,7 @@
     if (!r) return false;
     stopTimeline4d(); t4dCacheClear(); seq4d = null;
     $('timeline4d').style.display = 'none';
-    lastViewerUrl = r.viewerUrl; $('viewer').style.display='none'; $('glcanvas').style.display='block';
+    lastViewerUrl = r.viewerUrl; lastCameraPathUrl = r.cameraPath || null; $('viewer').style.display='none'; $('glcanvas').style.display='block';
     window.currentFileFormat = r.format || 'ply';
     const editable = window.currentFileFormat === 'ply';
     $('mPoints').disabled = !editable; $('mMesh').disabled = !editable;
@@ -1638,7 +2037,8 @@
     setGizmoEnabled(editable);
     if (editable) {
       window.currentRawUrl = null;
-      window.loadEditor(r.viewerUrl.split('url=')[1]);
+      await window.loadEditor(r.viewerUrl.split('url=')[1]);
+      await window.loadCameraPath(r.cameraPath);
       setModeBtns('mPoints');
     } else {
       const sceneUrl = r.viewerUrl.split('url=')[1];
@@ -1677,19 +2077,80 @@
   $('tglCams').onclick = () => { $('cbCams').checked = !$('cbCams').checked; syncToggles(); };
   $('btnResetCam').onclick = () => window.resetView();
 
+  // Item 4 (roadmap jul/2026): gráfico de loss em tempo real. O treino (PPISP e, se o
+  // Brush algum dia expuser, também ele) já manda cada linha de stdout via onStatus com
+  // stage:'train' — aqui só extraímos o "loss=" da linha e desenhamos um sparkline simples,
+  // sem precisar de nenhuma lib de gráfico.
+  const lossHistory = [];
+  const LOSS_MAX_POINTS = 400;
+  function resetLossChart() {
+    lossHistory.length = 0;
+    $('lossChart').style.display = 'none';
+    $('lossChartLabel').style.display = 'none';
+  }
+  function drawLossChart() {
+    const canvas = $('lossChart');
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    if (lossHistory.length < 2) return;
+    const min = Math.min(...lossHistory), max = Math.max(...lossHistory);
+    const range = Math.max(max - min, 1e-6);
+    ctx.beginPath();
+    lossHistory.forEach((v, i) => {
+      const x = (i / (lossHistory.length - 1)) * (w - 4) + 2;
+      const y = h - 4 - ((v - min) / range) * (h - 8);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    const grad = ctx.createLinearGradient(0, 0, w, 0);
+    grad.addColorStop(0, '#8b5cf6'); grad.addColorStop(1, '#22c55e');
+    ctx.strokeStyle = grad; ctx.lineWidth = 1.5; ctx.stroke();
+    $('lossChartFirst').textContent = 'loss ' + lossHistory[0].toFixed(4);
+    $('lossChartLast').textContent = lossHistory[lossHistory.length - 1].toFixed(4);
+  }
+  function pushLossFromLine(line) {
+    const m = /loss=([\d.]+)/.exec(line || '');
+    if (!m) return;
+    const v = parseFloat(m[1]);
+    if (!isFinite(v)) return;
+    lossHistory.push(v);
+    if (lossHistory.length > LOSS_MAX_POINTS) lossHistory.shift();
+    $('lossChart').style.display = 'block';
+    $('lossChartLabel').style.display = 'flex';
+    drawLossChart();
+  }
+  // Etapas longas sem barra própria (alinhamento de câmeras via COLMAP/MegaSam/DPVO/MASt3R)
+  // costumavam deixar a UI com a barra travada em 0% e o texto parado, dando impressão de
+  // travamento mesmo com o log mostrando progresso real (ex.: "100%|##########| 784/784").
+  // Agora: (a) só zera a barra quando a ETAPA muda (não a cada linha sem número), (b) um
+  // indicador "●" pulsante + contador de segundos desde a última linha prova que o processo
+  // continua vivo mesmo quando não há porcentagem pra mostrar.
+  let lastStatusStage = null, lastStatusAt = Date.now();
   window.bruxo.onStatus(d => {
     const i = order.indexOf(d.stage);
     order.forEach((s, j) => setStage(s, j < i ? 'done' : j === i ? 'active' : ''));
     $('stageLabel').textContent = I18N[curLang].stage[d.stage] || d.stage;
     $('stageLine').textContent = d.line;
+    if (d.stage !== lastStatusStage) { lastStatusStage = d.stage; $('obarIn').style.width = '0'; $('stagePct').textContent = ''; }
     if (d.prog != null) { $('obarIn').style.width = (d.prog*100)+'%'; $('stagePct').textContent = (d.prog*100).toFixed(0)+'%'; }
-    else { $('obarIn').style.width = '0'; $('stagePct').textContent = ''; }
+    lastStatusAt = Date.now();
+    if (d.stage === 'train') pushLossFromLine(d.line);
     log(d.line, d.line.startsWith('Baixando'));
   });
+  setInterval(() => {
+    const hb = $('stageHeartbeat');
+    if (!hb || $('statusOverlay').style.display === 'none') return;
+    const secs = Math.floor((Date.now() - lastStatusAt) / 1000);
+    const en = curLang === 'en';
+    hb.textContent = secs < 15 ? '●' : (en ? `● still working (${secs}s, normal for this step)` : `● ainda processando (${secs}s, normal nessa etapa)`);
+    hb.title = en ? 'The process keeps running in the background; some internal steps (model loading, bundle adjustment) print nothing for a while.'
+                  : 'O processo continua rodando em segundo plano; algumas etapas internas (carregamento de modelo, ajuste de feixe) ficam sem imprimir nada por um tempo.';
+  }, 1000);
   let snapBusy = false;
   window.bruxo.onTrainSnap(async d => {
     $('obarIn').style.width = (d.prog * 100) + '%';
     $('stagePct').textContent = (d.prog * 100).toFixed(0) + '%';
+    lastStatusAt = Date.now();
     if (snapBusy) return;
     snapBusy = true;
     try {
@@ -1700,24 +2161,43 @@
   });
   window.bruxo.onPreview(d => {
     log(I18N[curLang].msg.previewLog);
+    lastCameraPathUrl = d.cameraPath || null;
     window.showPreview(d.points, d.cameras);
   });
+  window.bruxo.onProjectOpened(async d => {
+    lastCameraPathUrl = d.cameraPath || null;
+    aligned = true; $('btnColmap').disabled = false; enableStart(true);
+    if (d.points) await window.showPreview(d.points, d.cameras);
+    if (d.ply) {
+      lastPly = d.ply; lastViewerUrl = d.viewerUrl;
+      $('sbPly').textContent = d.ply.split(/[\\/]/).pop(); $('btnFolder').disabled = false; $('btnWebTop').disabled = false;
+      window.currentFileFormat = 'ply'; setGizmoEnabled(true);
+      await window.loadEditor(d.viewerUrl.split('url=')[1]);
+      await window.loadCameraPath(d.cameraPath);
+      setModeBtns('mPoints');
+    } else if (d.cameraPath) await window.loadCameraPath(d.cameraPath);
+    log((curLang === 'en' ? '📂 Project opened: ' : '📂 Projeto aberto: ') + d.path);
+  });
   window.bruxo.onAligned(() => {
+    $('btnColmap').disabled = false;
     running = false; enableStart(true); aligned = true;
     ['setup','frames','colmap'].forEach(s => setStage(s, 'done'));
     $('statusOverlay').style.display = 'none';
+    $('btnAbort').disabled = true;
     $('sbState').textContent = I18N[curLang].msg.readyToTrain;
     log(I18N[curLang].msg.alignedLog);
   });
-  window.bruxo.onDone(d => {
+  window.bruxo.onDone(async d => {
     running = false; enableStart(true);
     order.forEach(s => setStage(s, 'done'));
     lastPly = d.ply;
+    lastCameraPathUrl = d.cameraPath || null;
     const name = d.ply.split(/[\\\/]/).pop();
     $('tSplat').innerHTML = I18N[curLang].tree.splatPrefix + '<span class="on">' + name + '</span>';
     $('sbPly').textContent = name; $('sbState').textContent = I18N[curLang].msg.ready2;
     $('btnFolder').disabled = false; $('btnSuper').disabled = false; $('btnWebTop').disabled = false;
     $('statusOverlay').style.display = 'none';
+    $('btnAbort').disabled = true;
     $('placeholder').style.display = 'none';
     // um resultado novo (SHARP, TripoSplat, pipeline normal…) é sempre um .ply único — se antes você
     // estava numa sequência 4D ou em modo GS, precisa voltar pro editor de pontos, senão o gizmo não
@@ -1727,7 +2207,8 @@
     $('mPoints').disabled = false; $('mMesh').disabled = false;
     setGizmoEnabled(true);
     lastViewerUrl = d.viewerUrl;
-    window.loadEditor(d.viewerUrl.split('url=')[1]);
+    await window.loadEditor(d.viewerUrl.split('url=')[1]);
+    await window.loadCameraPath(lastCameraPathUrl);
     window.setViewMode('points');
     setModeBtns('mPoints');
     log(I18N[curLang].msg.savedAtLog + d.ply);
@@ -1737,13 +2218,23 @@
     // um modo de IA (ex: FaceAnything) terminou de gerar uma sequência de frames — carrega direto na timeline
     running = false; enableStart(true);
     $('statusOverlay').style.display = 'none';
+    $('btnAbort').disabled = true;
     await load4DSequence(d);
   });
   window.bruxo.onError(d => {
     running = false; enableStart(true);
     $('sbState').textContent = I18N[curLang].msg.errorPill;
     $('statusOverlay').style.display = 'none';
+    $('btnAbort').disabled = true;
     log(I18N[curLang].msg.errorLog + d.message);
+    document.querySelector('[data-t="log"]').click();
+  });
+  window.bruxo.onCancelled(() => {
+    running = false; enableStart(true);
+    $('statusOverlay').style.display = 'none'; $('btnAbort').disabled = true;
+    const en = curLang === 'en';
+    $('sbState').textContent = en ? 'Cancelled' : 'Cancelado';
+    log(en ? '⏹ Processing cancelled. Existing frames, alignment and partial checkpoints were kept.' : '⏹ Processamento cancelado. Frames, alinhamento e checkpoints parciais existentes foram preservados.');
     document.querySelector('[data-t="log"]').click();
   });
 
@@ -1752,8 +2243,13 @@
     try { saved = localStorage.getItem('bruxoLang') || 'pt'; } catch (e) {}
     if (window.bruxo && window.bruxo.getLang) { try { saved = (await window.bruxo.getLang()) || saved; } catch (e) {} }
     translate(saved);
+    if (window.bruxo && window.bruxo.getVersion) {
+      try {
+        const v = await window.bruxo.getVersion();
+        if (v) { $('appVersion').textContent = 'v' + v; document.title = 'BruxoSplat v' + v; }
+      } catch (e) {}
+    }
   })();
 </script>
 </body>
 </html>
-
