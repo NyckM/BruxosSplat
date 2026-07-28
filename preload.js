@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('bruxo', {
   exportSplat4d: () => ipcRenderer.invoke('export-splat4d'),
   convertSeqSplat: () => ipcRenderer.invoke('convert-seq-splat'),
   onDone4d: cb => ipcRenderer.on('done4d', (_e, d) => cb(d)),
+  platform: process.platform,
+  getVersion: () => ipcRenderer.invoke('get-version'),
   getLang: () => ipcRenderer.invoke('get-lang'),
   setLang: lang => ipcRenderer.invoke('set-lang', lang),
   onMenu: cb => ipcRenderer.on('menu', (_e, a) => cb(a)),

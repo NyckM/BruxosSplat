@@ -3,6 +3,7 @@ const { app } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
+const extract = require('extract-zip');
 const { spawn, execSync, spawnSync } = require('child_process');
 
 const IS_MAC = process.platform === 'darwin';
@@ -62,6 +63,29 @@ const MODELS = {
     pip: ['plyfile', 'moviepy<2', 'addict', 'pycolmap', 'evo'],
     script: 'models/faceanything_run.py',
     sizeHint: '~15 GB (checkpoint) — requer GPU NVIDIA (o próprio repositório do FaceAnything pode não suportar Apple Silicon/MPS) e Git instalado. Licença CC BY-NC (uso não-comercial)'
+  },
+  ppisp: {
+    name: 'GSplat + PPISP (NVIDIA)',
+    // PPISP é uma extensão CUDA/PyTorch: mantém seu próprio ambiente para não
+    // interferir com SHARP, TripoSplat ou FaceAnything.
+    ownVenv: true,
+    repo: 'https://github.com/nv-tlabs/ppisp.git',
+    repoDirName: 'ppisp',
+    cudaTorch: { index: 'https://download.pytorch.org/whl/cu124', pkgs: ['torch==2.6.0', 'torchvision==0.21.0'] },
+    pip: ['gsplat', 'pycolmap', 'plyfile', 'imageio'],
+    cudaExtension: true,
+    script: 'models/ppisp_train.py',
+    sizeHint: '~4 GB — requer GPU NVIDIA, CUDA Toolkit e Visual Studio Build Tools'
+  },
+  zipsplat: {
+    name: 'ZipSplat (Foto/Vídeo → 3DGS)',
+    ownVenv: true,
+    repo: 'https://github.com/cvg/ZipSplat.git',
+    repoDirName: 'ZipSplat',
+    cudaTorch: { index: 'https://download.pytorch.org/whl/cu124', pkgs: ['torch==2.6.0', 'torchvision==0.21.0'] },
+    pip: ['imageio', 'imageio-ffmpeg', 'plyfile'],
+    script: 'models/zipsplat_run.py',
+    sizeHint: '~5 GB com pesos — requer GPU NVIDIA/CUDA; baixa pesos na primeira execução'
   }
 };
 
@@ -118,7 +142,7 @@ function ensureGit() {
 
 // acha a pasta bin/ do CUDA Toolkit instalado (onde fica nvcc.exe) — o instalador da NVIDIA seta a env var
 // CUDA_PATH, mas ela nem sempre chega até processos filhos do Electron; então também tenta o caminho padrão.
-function findCudaBin() {
+function findCudaBin(maxMajor = null) {
   if (IS_MAC) return null;
   const candidates = [];
   if (process.env.CUDA_PATH) candidates.push(path.join(process.env.CUDA_PATH, 'bin'));
@@ -126,7 +150,16 @@ function findCudaBin() {
   try {
     for (const v of fs.readdirSync(root).sort().reverse()) candidates.push(path.join(root, v, 'bin'));
   } catch {}
-  return candidates.find(c => fs.existsSync(path.join(c, 'nvcc.exe'))) || null;
+  for (const bin of candidates) {
+    // Com CUDA 12 e 13 lado a lado, não permita que CUDA_PATH=v13 tenha
+    // prioridade quando o backend explicitamente precisa da série 12.x.
+    const versionDir = path.basename(path.dirname(bin));
+    const match = versionDir.match(/v?(\d+)(?:\.\d+)?/i);
+    const major = match ? Number(match[1]) : null;
+    if (maxMajor != null && major != null && major > maxMajor) continue;
+    if (fs.existsSync(path.join(bin, 'nvcc.exe'))) return bin;
+  }
+  return null;
 }
 
 // procura um executável (ex: cl.exe) nas pastas de um PATH; usado pra achar o cl.exe do MSVC depois do vcvars.
@@ -169,7 +202,7 @@ function getVcVarsEnv(log) {
   return _vcVarsCache;
 }
 
-function run(exe, args, onLine, env) {
+function run(exe, args, onLine, env, cwd) {
   return new Promise((resolve, reject) => {
     // No Windows, spawn() sem shell:true não resolve alguns instaladores de "git"/etc que só deixam um
     // .cmd/.bat no PATH (em vez de .exe direto) — dá "spawn git ENOENT" mesmo com o git funcionando
@@ -179,13 +212,68 @@ function run(exe, args, onLine, env) {
     // têm espaço/caractere especial antes de montar a linha de comando.
     const useShell = process.platform === 'win32';
     const q = a => (useShell && /[\s&|<>^()%!]/.test(String(a)) && !/^".*"$/.test(String(a))) ? '"' + a + '"' : a;
+    const childEnv = { ...process.env, ...env };
+    // Windows trata PATH/Path como a mesma variável, mas um objeto Node pode
+    // levar as duas grafias ao processo-filho. Nessa situação o Windows pode
+    // escolher a versão sem o MSVC e `cl.exe` desaparece da compilação.
+    if (process.platform === 'win32') {
+      const preferredPath = (env && (env.Path || env.PATH)) || childEnv.Path || childEnv.PATH || '';
+      for (const key of Object.keys(childEnv)) if (key.toLowerCase() === 'path') delete childEnv[key];
+      childEnv.Path = preferredPath;
+    }
     const p = spawn(useShell ? q(exe) : exe, useShell ? args.map(q) : args,
-      { windowsHide: true, shell: useShell, env: { ...process.env, ...env } });
+      { windowsHide: true, shell: useShell, cwd, env: childEnv });
     const feed = d => d.toString().split(/\r?\n/).forEach(l => l.trim() && onLine(l.trim()));
     p.stdout.on('data', feed); p.stderr.on('data', feed);
     p.on('error', reject);
     p.on('close', c => c === 0 ? resolve() : reject(new Error(path.basename(exe) + ' saiu com código ' + c)));
   });
+}
+
+// Ambiente reutilizável para extensões CUDA do PPISP e do gsplat. O gsplat
+// compila seu backend na primeira renderização, portanto não basta passar
+// essas variáveis apenas durante `uv pip install`.
+function makePpispCudaEnv(py, log) {
+  const cudaBin = findCudaBin(12);
+  if (!cudaBin) throw new Error('CUDA Toolkit 12.x não encontrado. Instale CUDA 12.8 (ou 12.4/12.6) e tente de novo.');
+  const msvcEnv = getVcVarsEnv(log);
+  if (!msvcEnv) throw new Error('Visual Studio Build Tools com C++ não encontrado. Instale "Desktop development with C++" e tente de novo.');
+  const msvcPath = msvcEnv.Path || msvcEnv.PATH || process.env.Path || process.env.PATH || '';
+  if (!findInPath('cl.exe', msvcPath)) throw new Error('O Visual Studio foi localizado, mas vcvarsall não disponibilizou cl.exe no PATH. Repare a carga de trabalho "Desktop development with C++".');
+  return {
+    ...msvcEnv,
+    CUDA_HOME: path.dirname(cudaBin),
+    CUDA_PATH: path.dirname(cudaBin),
+    DISTUTILS_USE_SDK: '1',
+    MSSdk: '1',
+    // ninja.exe é instalado em Scripts do venv pelo uv.
+    Path: path.dirname(py) + path.delimiter + cudaBin + path.delimiter + msvcPath
+  };
+}
+
+// gsplat publicado no PyPI inclui -Wno-attributes nos flags C++; essa é uma
+// flag de GCC/Clang e o compilador Microsoft falha com D8021. A extensão é
+// compilada sob demanda no Windows, então corrigimos somente o arquivo do
+// venv isolado, sem tocar no sistema nem em outros modelos.
+function patchGsplatForMsvc(py, log) {
+  if (IS_MAC) return;
+  const venvDir = path.dirname(path.dirname(py));
+  const backend = path.join(venvDir, 'Lib', 'site-packages', 'gsplat', 'cuda', '_backend.py');
+  if (!fs.existsSync(backend)) return;
+  const source = fs.readFileSync(backend, 'utf8');
+  // Nas versões recentes a flag fica na mesma linha de uma lista Python,
+  // por exemplo: extra_cflags = ["-O3", "-Wno-attributes"]. Removê-la
+  // apenas quando ocupa uma linha não cobre esse caso e deixa o MSVC receber
+  // uma opção de GCC/Clang. Esta substituição preserva vírgulas finais válidas
+  // de listas Python e só altera a flag incompatível.
+  const patched = source
+    .replace(/,\s*["']-Wno-attributes["']/g, '')
+    .replace(/["']-Wno-attributes["']\s*,/g, '')
+    .replace(/["']-Wno-attributes["']/g, '');
+  if (patched !== source) {
+    fs.writeFileSync(backend, patched, 'utf8');
+    log('Compatibilidade Windows: removida flag inválida do GSplat para MSVC.');
+  }
 }
 
 async function ensureUv(log) {
@@ -280,6 +368,27 @@ async function installModel(key, log) {
     if (m.cudaTorch && !IS_MAC) {
       log('Instalando torch com CUDA (' + m.cudaTorch.pkgs.join(', ') + ')…');
       await run(uv, ['pip', 'install', '--python', py, '--index-url', m.cudaTorch.index, ...m.cudaTorch.pkgs], log);
+    }
+
+    // PPISP compila um kernel CUDA próprio contra o Torch já instalado. Ao contrário
+    // de extensões CPU (como torchmcubes), aqui CUDA e o ambiente MSVC precisam estar
+    // disponíveis para o nvcc durante o build.
+    if (m.cudaExtension) {
+      if (IS_MAC) throw new Error('PPISP requer CUDA/NVIDIA e não é suportado no macOS. Use o motor Brush.');
+      const buildEnv = makePpispCudaEnv(py, log);
+      log('Compilando PPISP com CUDA — esta etapa acontece apenas na primeira instalação…');
+      // O pyproject atual do PPISP não expõe setuptools ao build isolado do uv
+      // (prepare_metadata_for_build_editable falha antes de compilar o CUDA).
+      // Instalar as ferramentas no venv e usar o build não-isolado é o caminho
+      // oficial recomendado pelo próprio projeto para manter ABI do Torch.
+      await run(uv, ['pip', 'install', '--python', py, '--index-url', 'https://pypi.org/simple', 'setuptools', 'wheel'], log, buildEnv);
+      const a = ['pip', 'install', '--python', py, '--no-build-isolation', '--index-url', 'https://pypi.org/simple',
+        '--extra-index-url', m.cudaTorch.index, '--index-strategy', 'unsafe-best-match',
+        '-e', repoDir, ...(m.pip || [])];
+      await run(uv, a, log, buildEnv);
+      fs.writeFileSync(marker, new Date().toISOString());
+      log('✅ ' + m.name + ' instalado.');
+      return;
     }
 
     // alguns pacotes (ex: torchmcubes, do TripoSR) compilam na hora e o build precisa achar o Torch já
@@ -387,6 +496,118 @@ async function ensureConvertDeps(log) {
   return py;
 }
 
+/** Instala o backend PPISP e devolve o Python do ambiente isolado dele. */
+async function ensurePpispTrainer(log) {
+  await installModel('ppisp', log);
+  const { uv, py } = await ensureVenv(log, venvSubFor('ppisp', MODELS.ppisp));
+  const env = makePpispCudaEnv(py, log);
+  // A distribuição do gsplat pode compilar o backend CUDA no primeiro render.
+  // Instalar o Ninja aqui evita a falha tardia "Ninja is required".
+  log('Preparando Ninja para o backend CUDA do GSplat…');
+  await run(uv, ['pip', 'install', '--python', py, '--index-url', 'https://pypi.org/simple', 'ninja'], log, env);
+  patchGsplatForMsvc(py, log);
+  return { py, env };
+}
+
+/** DPVO direto para Windows/NVIDIA, compilado no venv isolado contra a GPU local. */
+async function ensureDpvoDirect(log) {
+  if (IS_MAC) throw new Error('DPVO direto requer CUDA/NVIDIA; no macOS use COLMAP.');
+  ensureGit();
+  const repoDir = path.join(MODELS_SRC_DIR(), 'dpvo');
+  if (!fs.existsSync(repoDir)) {
+    fs.mkdirSync(MODELS_SRC_DIR(), { recursive: true });
+    log('Baixando DPVO oficial e submódulos…');
+    await run('git', ['clone', '--recursive', '--depth', '1', 'https://github.com/princeton-vl/DPVO.git', repoDir], log);
+  }
+  const { uv, py } = await ensureVenv(log, 'pyenv_dpvo');
+  const marker = path.join(PY_DIR('pyenv_dpvo'), '.installed_dpvo_direct');
+  const model = path.join(repoDir, 'dpvo.pth');
+  if (!fs.existsSync(marker)) {
+    log('Instalando PyTorch CUDA isolado para DPVO…');
+    await run(uv, ['pip', 'install', '--python', py, '--index-url', 'https://download.pytorch.org/whl/cu124',
+      'torch==2.6.0', 'torchvision==0.21.0'], log);
+    await run(uv, ['pip', 'install', '--python', py, '--index-url', 'https://pypi.org/simple',
+      '--find-links', 'https://data.pyg.org/whl/torch-2.6.0+cu124.html',
+      'torch-scatter', 'tensorboard', 'numba', 'tqdm', 'einops', 'pypose', 'kornia',
+      'numpy==1.26.4', 'plyfile', 'evo', 'opencv-python', 'yacs'], log);
+    log('Instalando wheel CUDA pré-compilada do DPVO (sem Docker/compilação local)…');
+    await run(uv, ['pip', 'install', '--python', py, '--index-url', 'https://pypi.org/simple',
+      '--find-links', 'https://pozzettiandrea.github.io/cuda-wheels/dpvo-cuda/',
+      'dpvo-cuda==0.0.0+cu124torch2.6'], log);
+    fs.writeFileSync(marker, new Date().toISOString());
+  }
+  if (!fs.existsSync(model)) {
+    const zip = path.join(repoDir, 'models.zip');
+    log('Baixando pesos do DPVO (primeira vez)…');
+    await downloadResumable('https://www.dropbox.com/s/nap0u8zslspdwm4/models.zip?dl=1', zip, () => {});
+    await extract(zip, { dir: repoDir });
+    try { fs.unlinkSync(zip); } catch {}
+  }
+  if (!fs.existsSync(model)) throw new Error('Pesos do DPVO não foram encontrados após o download. Rode novamente.');
+  return { py, repoDir };
+}
+
+/** MASt3R oficial em ambiente próprio: não divide Torch nem dependências com os outros motores. */
+async function ensureMast3r(log) {
+  if (IS_MAC) throw new Error('MASt3R neste app requer CUDA/NVIDIA; no macOS use COLMAP.');
+  ensureGit();
+  const repoDir = path.join(MODELS_SRC_DIR(), 'mast3r');
+  if (!fs.existsSync(repoDir)) {
+    fs.mkdirSync(MODELS_SRC_DIR(), { recursive: true });
+    log('Baixando MASt3R oficial e o submódulo DUSt3R…');
+    await run('git', ['clone', '--recursive', '--depth', '1', 'https://github.com/naver/mast3r.git', repoDir], log);
+  }
+  const { uv, py } = await ensureVenv(log, 'pyenv_mast3r');
+  const marker = path.join(PY_DIR('pyenv_mast3r'), '.installed_mast3r');
+  if (!fs.existsSync(marker)) {
+    log('Instalando PyTorch CUDA isolado para MASt3R…');
+    await run(uv, ['pip', 'install', '--python', py, '--index-url', 'https://download.pytorch.org/whl/cu124',
+      'torch==2.6.0', 'torchvision==0.21.0'], log);
+    log('Instalando dependências oficiais do MASt3R…');
+    await run(uv, ['pip', 'install', '--python', py, '-r', path.join(repoDir, 'requirements.txt')], log);
+    const dust3rReq = path.join(repoDir, 'dust3r', 'requirements.txt');
+    if (fs.existsSync(dust3rReq)) await run(uv, ['pip', 'install', '--python', py, '-r', dust3rReq], log);
+    await run(uv, ['pip', 'install', '--python', py, 'pycolmap', 'plyfile'], log);
+    // O MASt3R oficial não tem setup.py/pyproject.toml, portanto não pode ser
+    // instalado com pip -e. Um arquivo .pth é o mecanismo padrão do Python
+    // para registrar um checkout de código como caminho de importação.
+    const sitePackages = path.join(PY_DIR('pyenv_mast3r'), IS_MAC ? 'lib' : 'Lib', IS_MAC ? 'python3.11' : 'site-packages');
+    fs.writeFileSync(path.join(sitePackages, 'bruxos_mast3r_repo.pth'), repoDir + '\n');
+    fs.writeFileSync(marker, new Date().toISOString());
+  }
+  return { py, repoDir };
+}
+
+/** Instala 3DGRUT no seu próprio checkout/.venv usando o script UV oficial da NVIDIA. */
+async function ensure3dgrut(log) {
+  if (IS_MAC) throw new Error('3DGRUT exige CUDA/NVIDIA e não é suportado no macOS.');
+  ensureGit();
+  const repoDir = path.join(MODELS_SRC_DIR(), '3dgrut');
+  if (!fs.existsSync(repoDir)) {
+    fs.mkdirSync(MODELS_SRC_DIR(), { recursive: true });
+    log('Baixando 3DGRUT e submódulos…');
+    await run('git', ['clone', '--recursive', 'https://github.com/nv-tlabs/3dgrut.git', repoDir], log);
+  }
+  const py = path.join(repoDir, '.venv', 'Scripts', 'python.exe');
+  if (!fs.existsSync(py)) {
+    const cudaBin = findCudaBin(12);
+    if (!cudaBin) throw new Error('3DGRUT requer CUDA Toolkit instalado.');
+    log('Instalando ambiente 3DGRUT via UV oficial — a compilação CUDA pode demorar…');
+    // O script oficial usa o diretório de trabalho para criar `.venv`; portanto ele
+    // precisa rodar dentro do checkout, e colocamos o uv que o BruxoSplat baixou
+    // primeiro no PATH para não depender de instalação global.
+    const uv = await ensureUv(log);
+    await run('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'ByPass', '-File', path.join(repoDir, 'install_env_uv.ps1')], log,
+      {
+        CUDA_HOME: path.dirname(cudaBin),
+        CUDA_PATH: path.dirname(cudaBin),
+        PATH: path.dirname(uv) + path.delimiter + cudaBin + path.delimiter + process.env.PATH
+      }, repoDir);
+  }
+  if (!fs.existsSync(py)) throw new Error('O instalador 3DGRUT terminou, mas Python do ambiente não foi encontrado.');
+  return { py, repoDir };
+}
+
 /** Roda o script do modelo. args: {input, outDir, maxFrames?} */
 async function runModel(key, args, log) {
   const m = MODELS[key];
@@ -399,4 +620,4 @@ async function runModel(key, args, log) {
   await run(py, cliArgs, log, env);
 }
 
-module.exports = { installModel, runModel, ensureSplat4dCli, ensureConvertDeps, MODELS, IS_MAC };
+module.exports = { installModel, runModel, ensureSplat4dCli, ensureConvertDeps, ensurePpispTrainer, ensureDpvoDirect, ensureMast3r, ensure3dgrut, MODELS, IS_MAC };

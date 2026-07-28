@@ -174,4 +174,37 @@ async function ensureTools(sendStatus) {
   return state;
 }
 
-module.exports = { ensureTools, TOOLS_DIR, IS_MAC, hasNvidiaGpu };
+/**
+ * Baixa (uma única vez) a vocabulary tree pré-treinada do COLMAP, necessária para
+ * loop detection no sequential_matcher e para o vocab_tree_matcher.
+ *
+ * Sem esse arquivo o COLMAP não consegue fazer detecção de laço: num vídeo que dá
+ * a volta e retorna ao ponto de partida, o matching sequencial sozinho nunca liga
+ * o fim ao começo, e o erro de pose acumulado aparece como deriva (a cena "não
+ * fecha"). Usamos a árvore de 32K palavras (~250 MB) — as de 256K/1M são bem
+ * maiores e o ganho não compensa para vídeo de cena única.
+ *
+ * Devolve o caminho do arquivo, ou null se não deu para baixar (o chamador
+ * simplesmente segue sem loop detection em vez de abortar o alinhamento).
+ */
+async function ensureVocabTree(sendStatus) {
+  const dir = TOOLS_DIR();
+  fs.mkdirSync(dir, { recursive: true });
+  const dest = path.join(dir, 'vocab_tree_flickr100K_words32K.bin');
+  // ~250 MB: se o arquivo existe mas está absurdamente pequeno, foi download
+  // interrompido — melhor refazer do que passar um arquivo corrompido ao COLMAP.
+  if (fs.existsSync(dest) && fs.statSync(dest).size > 100e6) return dest;
+  try {
+    if (fs.existsSync(dest)) fs.rmSync(dest, { force: true });
+    sendStatus && sendStatus('Baixando vocabulary tree do COLMAP (~250 MB, só na primeira vez)…');
+    await download('https://demuc.de/colmap/vocab_tree_flickr100K_words32K.bin', dest);
+    if (!fs.existsSync(dest) || fs.statSync(dest).size < 100e6) throw new Error('arquivo incompleto');
+    return dest;
+  } catch (e) {
+    try { fs.rmSync(dest, { force: true }); } catch {}
+    sendStatus && sendStatus('Não foi possível baixar a vocabulary tree (' + e.message + ') — seguindo sem loop detection.');
+    return null;
+  }
+}
+
+module.exports = { ensureTools, ensureVocabTree, TOOLS_DIR, IS_MAC, hasNvidiaGpu };

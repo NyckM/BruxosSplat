@@ -12,11 +12,10 @@ if [ $status -eq 0 ]; then
     echo "✅ Pronto! O .dmg/.zip está na pasta dist/"
     echo "   São esses arquivos que você publica nas Releases do GitHub."
     echo ""
-    echo "⚠ Lembrete: sem um certificado de desenvolvedor Apple (Apple Developer ID),"
-    echo "   o app não é assinado/notarizado — quem baixar vai precisar clicar com o"
-    echo "   botão direito → Abrir na primeira vez (o Gatekeeper do macOS avisa que é"
-    echo "   de \"desenvolvedor não identificado\"). Isso é normal pra apps distribuídos"
-    echo "   fora da Mac App Store sem certificado pago."
+    echo "ℹ O pacote recebeu assinatura ad-hoc interna e foi verificado durante o build."
+    echo "  Sem Apple Developer ID/notarização, quem baixar ainda verá o aviso de"
+    echo "  desenvolvedor não identificado e deverá usar botão direito → Abrir uma vez."
+    echo "  O app não deve aparecer como ‘danificado’ por assinatura inconsistente."
     open dist
 else
     echo "❌ Falhou (código $status). Veja o erro acima."

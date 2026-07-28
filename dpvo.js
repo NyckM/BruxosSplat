@@ -6,6 +6,19 @@ const path = require('path');
 let processTracker = () => {};
 function setProcessTracker(tracker) { processTracker = typeof tracker === 'function' ? tracker : () => {}; }
 
+// Mesma extração de progresso do pipeline.js (tqdm "NN%|" ou "[cur/total]"),
+// duplicada aqui porque dpvo.js não compartilha módulo com pipeline.js. Sem
+// isso o passo "Alinhando câmeras (DPVO direto / CUDA)" ficava minutos com a
+// barra parada em 0% mesmo mostrando progresso real no log.
+function parseLineProgress(line) {
+  let m = /(\d{1,3}(?:\.\d+)?)\s*%\s*\|/.exec(line);
+  if (m) { const p = parseFloat(m[1]) / 100; if (isFinite(p)) return Math.min(1, Math.max(0, p)); }
+  m = /\[(\d+)\s*\/\s*(\d+)\]/.exec(line) || /\b(\d+)\s*\/\s*(\d+)\b/.exec(line);
+  if (m) { const cur = parseFloat(m[1]), tot = parseFloat(m[2]); if (tot > 0 && isFinite(cur)) return Math.min(1, Math.max(0, cur / tot)); }
+  return null;
+}
+function reportP(report, stage, line) { report(stage, line, parseLineProgress(line)); }
+
 function run(exe, args, cwd, onLine) {
   return new Promise((resolve, reject) => {
     // Sem isso, os prints do Python ficam no buffer quando o app captura o
@@ -133,9 +146,18 @@ async function prepareDatasetDPVO(tools, opts, report, onPreview) {
   if (Math.max(original.width, original.height) > requestedMax) {
     report('frames', `DPVO: frames redimensionados para ${size.width}×${size.height} para acelerar a estimativa de poses.`);
   }
-  const calib = generateCalib(size.width, size.height);
+  // DPVO não lê o FOV real do vídeo (containers de vídeo raramente carregam essa
+  // info de lente, diferente de fotos JPEG com EXIF) — sem um FOV correto aqui, a
+  // distância focal usada pra triangular a cena fica errada, e isso se traduz
+  // diretamente em "câmera/trajetória não batem com o vídeo" (escala/proporção
+  // erradas), porque toda a reconstrução monocular deriva desse valor. Antes o
+  // app assumia 60° pra qualquer câmera; agora a UI deixa escolher (celular normal,
+  // ultra-wide, ação/GoPro etc.) — ainda é uma aproximação, mas pelo menos ajustável.
+  const fovDeg = Number(opts.dpvoFov) || 60;
+  const calib = generateCalib(size.width, size.height, fovDeg);
   const calibPath = path.join(work, 'calib.txt');
   fs.writeFileSync(calibPath, `${calib.fx} ${calib.fy} ${calib.cx} ${calib.cy}\n`);
+  report('colmap', `Calibração aproximada: FOV ${fovDeg}° → fx=${calib.fx.toFixed(1)} (ajustável em Alinhamento de câmera > Campo de visão).`);
 
   report('frames', 'Extraindo frames para DPVO…');
   const args = []; if (video.start) args.push('-ss', video.start); if (video.end) args.push('-to', video.end);
@@ -148,7 +170,7 @@ async function prepareDatasetDPVO(tools, opts, report, onPreview) {
 
   report('colmap', 'Alinhando câmeras (DPVO direto / CUDA)…');
   await run(tools.dpvoPython, ['demo.py', '--imagedir', imagesDir, '--calib', calibPath,
-    '--network', 'dpvo.pth', '--stride', '2', '--name', runName, '--save_colmap', '--save_ply'], tools.dpvoRepo, l => report('colmap', l));
+    '--network', 'dpvo.pth', '--stride', '2', '--name', runName, '--save_colmap', '--save_ply'], tools.dpvoRepo, l => reportP(report, 'colmap', l));
   const model = findColmapModel(dpvoOut);
   if (!model) throw new Error('DPVO terminou sem modelo COLMAP. Confira o log acima.');
   const poseCount = normalizeDpvoColmapModel(model, imagesDir);
@@ -171,4 +193,4 @@ async function prepareDatasetDPVO(tools, opts, report, onPreview) {
   return work;
 }
 
-module.exports = { prepareDatasetDPVO, generateCalib, getVideoResolution, normalizeDpvoColmapModel, setProcessTracker };
+module.exports = { prepareDatasetDPVO, generateCalib, getVideoResolution, normalizeDpvoColmapModel, setProcessTracker, parseLineProgress, reportP };

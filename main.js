@@ -4,7 +4,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
-const { ensureTools, hasNvidiaGpu } = require('./downloader');
+const { ensureTools, ensureVocabTree, hasNvidiaGpu } = require('./downloader');
 const { installModel, runModel, ensureSplat4dCli, ensureConvertDeps, ensurePpispTrainer, ensureDpvoDirect, ensureMast3r, ensure3dgrut, MODELS } = require('./envman');
 const { prepareDataset, prepareDatasetMast3r, prepareDatasetMegaSam, trainSplat, trainPpisp, train3dgrut, setProcessTracker: setPipelineProcessTracker } = require('./pipeline');
 const { prepareDatasetDPVO, setProcessTracker: setDpvoProcessTracker } = require('./dpvo');
@@ -354,6 +354,7 @@ function createWindow() {
   win.loadFile(path.join(__dirname, 'ui', 'index.html'));
 }
 
+ipcMain.handle('get-version', () => app.getVersion());
 ipcMain.handle('get-lang', () => currentLang);
 ipcMain.handle('set-lang', (_e, lang) => {
   currentLang = (lang === 'en') ? 'en' : 'pt';
@@ -443,10 +444,16 @@ async function doAlign(opts) {
     tools.megasamPython = py;
     tools.megasamRepo = repoDir;
   }
+  // Loop detection e o matcher por vocabulary tree exigem uma árvore pré-treinada
+  // (~250 MB). Só baixamos quando o usuário realmente pediu uma dessas opções,
+  // pra não impor esse download a quem usa o alinhamento padrão.
+  if (opts.colmap && (opts.colmap.loop || opts.colmap.matcher === 'vocabtree')) {
+    tools.vocabTree = await ensureVocabTree(l => send('status', { stage: 'setup', line: l }));
+  }
   const workDir = path.join(app.getPath('userData'), 'projects', 'proj_' + Date.now());
   const prepare = opts.alignMethod === 'dpvo' ? prepareDatasetDPVO : opts.alignMethod === 'mast3r' ? prepareDatasetMast3r : opts.alignMethod === 'megasam' ? prepareDatasetMegaSam : prepareDataset;
   await prepare(tools, { ...opts, workDir },
-    (stage, line) => send('status', { stage, line }),
+    (stage, line, prog) => send('status', { stage, line, prog }),
     prev => {
       previewPly = prev.pointsPly;
       previewCams = parseImagesTxt(prev.imagesTxt);

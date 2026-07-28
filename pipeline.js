@@ -12,6 +12,31 @@ function modelScript(name) {
   return unpacked && fs.existsSync(unpacked) ? unpacked : path.join(__dirname, 'models', name);
 }
 
+// Extrai uma porcentagem de progresso de uma linha de log, quando dá. Cobre
+// barras estilo tqdm ("100%|##########| 784/784 [01:18<00:00, 9.99it/s]", usadas
+// pelo MegaSam/MASt3R/DROID-SLAM) e contadores tipo "[123/784]" (usados pelo
+// COLMAP em "Processed file [123/784]"). Sem isso, etapas longas como alinhamento
+// de câmeras ficavam com a barra de progresso travada em 0% o tempo todo — mesmo
+// com o log mostrando "100%" no texto — dando a impressão de que o app travou.
+function parseLineProgress(line) {
+  let m = /(\d{1,3}(?:\.\d+)?)\s*%\s*\|/.exec(line);
+  if (m) { const p = parseFloat(m[1]) / 100; if (isFinite(p)) return Math.min(1, Math.max(0, p)); }
+  m = /\[(\d+)\s*\/\s*(\d+)\]/.exec(line) || /\b(\d+)\s*\/\s*(\d+)\b/.exec(line);
+  if (m) { const cur = parseFloat(m[1]), tot = parseFloat(m[2]); if (tot > 0 && isFinite(cur)) return Math.min(1, Math.max(0, cur / tot)); }
+  return null;
+}
+function reportP(report, stage, line) { report(stage, line, parseLineProgress(line)); }
+
+// Filtro de escala do ffmpeg limitando o LADO MAIOR (não a largura).
+// A versão antiga era `scale='min(MAX,iw)':-2`, que limita sempre a LARGURA — em
+// vídeo retrato (ex.: 2160x3840) isso deixava passar um lado maior bem acima do
+// pedido (1600 de largura => 2844 de altura), gastando VRAM à toa. Agora o limite
+// vale pro lado maior de verdade, em retrato e paisagem, e nunca faz upscale.
+function scaleFilter(maxSize) {
+  const m = Math.max(256, Math.round(maxSize || 1600));
+  return `scale=w='if(gte(iw,ih),min(${m},iw),-2)':h='if(lt(iw,ih),min(${m},ih),-2)'`;
+}
+
 function run(exe, args, cwd, onLine, env) {
   return new Promise((resolve, reject) => {
     const childEnv = { ...process.env, ...env };
@@ -27,6 +52,116 @@ function run(exe, args, cwd, onLine, env) {
     p.on('error', err => { processTracker(null, p); reject(err); });
     p.on('close', code => { processTracker(null, p); code === 0 ? resolve() : reject(new Error(`${path.basename(exe)} saiu com código ${code}`)); });
   });
+}
+
+// Lê o `-h` de um subcomando do COLMAP pra descobrir os nomes de flag que a build
+// instalada aceita. Necessário porque o COLMAP 4.x renomeou várias opções: o que
+// era `--SiftMatching.guided_matching` virou `--FeatureMatching.guided_matching`,
+// e `--SiftExtraction.use_gpu`/`max_image_size` viraram `--FeatureExtraction.*`.
+// Chutar nome de flag quebraria o alinhamento inteiro — foi exatamente assim que
+// o `--total-steps` do Brush passou batido por tanto tempo.
+const _cmHelpCache = new Map();
+function colmapHelp(exe, cmd) {
+  const key = exe + '|' + cmd;
+  if (_cmHelpCache.has(key)) return _cmHelpCache.get(key);
+  const p = new Promise(resolve => {
+    let out = '';
+    try {
+      const proc = spawn(exe, [cmd, '-h'], { windowsHide: true });
+      const t = setTimeout(() => { try { proc.kill(); } catch {} resolve(out); }, 15000);
+      proc.stdout.on('data', d => out += d.toString());
+      proc.stderr.on('data', d => out += d.toString());
+      proc.on('error', () => { clearTimeout(t); resolve(''); });
+      proc.on('close', () => { clearTimeout(t); resolve(out); });
+    } catch { resolve(''); }
+  });
+  _cmHelpCache.set(key, p);
+  return p;
+}
+// Devolve o primeiro nome de flag que existe nesse help, ou null (então é ignorada).
+function pickFlag(help, ...candidates) {
+  for (const c of candidates) if (help.includes(c)) return c;
+  return null;
+}
+
+/**
+ * Alinhamento COLMAP em etapas (feature_extractor → matcher → mapper), com os
+ * parâmetros de qualidade que o `automatic_reconstructor` não expõe.
+ * Só roda quando o usuário escolhe um preset diferente de "Automático".
+ */
+async function colmapStaged(tools, cfg, ctx, report) {
+  const { work, imagesDir, dbPath, sparseDir, singleCamera } = ctx;
+  const exe = tools.colmap;
+  const push = (args, flag, value) => { if (flag) args.push(flag, String(value)); };
+
+  // ── 1) Extração de features ────────────────────────────────────────────────
+  const hExt = await colmapHelp(exe, 'feature_extractor');
+  const ext = ['feature_extractor', '--database_path', dbPath, '--image_path', imagesDir,
+    '--ImageReader.camera_model', 'OPENCV', '--ImageReader.single_camera', singleCamera];
+  push(ext, pickFlag(hExt, '--SiftExtraction.max_num_features'), cfg.features);
+  push(ext, pickFlag(hExt, '--SiftExtraction.peak_threshold'), cfg.peak);
+  push(ext, pickFlag(hExt, '--SiftExtraction.edge_threshold'), 10);
+  // first_octave já é -1 por padrão no COLMAP; passamos explícito só pra não
+  // depender de o padrão continuar o mesmo entre versões.
+  push(ext, pickFlag(hExt, '--SiftExtraction.first_octave'), -1);
+  if (cfg.affine) push(ext, pickFlag(hExt, '--SiftExtraction.estimate_affine_shape'), 1);
+  if (cfg.dsp) push(ext, pickFlag(hExt, '--SiftExtraction.domain_size_pooling'), 1);
+  if (cfg.affine || cfg.dsp) {
+    // Nenhum dos dois tem kernel CUDA no COLMAP — ligando qualquer um, a extração
+    // cai pra implementação de CPU. Avisamos porque a diferença de tempo é grande.
+    report('colmap', '⚠️ Affine shape / DSP-SIFT não rodam em GPU no COLMAP — esta etapa vai usar CPU e demorar bem mais.');
+  }
+  report('colmap', `Extraindo features (máx. ${cfg.features}/imagem, peak ${cfg.peak})…`);
+  await run(exe, ext, work, l => reportP(report, 'colmap', l));
+
+  // ── 2) Matching ────────────────────────────────────────────────────────────
+  // vocab_tree é o matcher indicado quando há centenas de imagens sem ordem
+  // conhecida; sequential é o certo para vídeo; exhaustive só para poucas fotos.
+  const matcherCmd = cfg.matcher === 'exhaustive' ? 'exhaustive_matcher'
+                   : cfg.matcher === 'vocabtree' ? 'vocab_tree_matcher'
+                   : 'sequential_matcher';
+  const hMat = await colmapHelp(exe, matcherCmd);
+  const mat = [matcherCmd, '--database_path', dbPath];
+  if (cfg.guided) push(mat, pickFlag(hMat, '--FeatureMatching.guided_matching', '--SiftMatching.guided_matching'), 1);
+
+  // Loop detection: num vídeo que dá a volta e volta ao ponto inicial, o matching
+  // sequencial sozinho nunca liga o fim ao começo — o erro de pose acumula e a
+  // cena "não fecha". A detecção de laço resolve isso, mas o COLMAP exige uma
+  // vocabulary tree pré-treinada para fazê-la. Se o arquivo não estiver
+  // disponível, seguimos sem (avisando), em vez de derrubar o alinhamento.
+  if ((cfg.loop || cfg.matcher === 'vocabtree') && ctx.vocabTree) {
+    if (cfg.matcher === 'vocabtree') {
+      push(mat, pickFlag(hMat, '--VocabTreeMatching.vocab_tree_path'), ctx.vocabTree);
+    } else {
+      const loopFlag = pickFlag(hMat, '--SequentialMatching.loop_detection');
+      const vocabFlag = pickFlag(hMat, '--SequentialMatching.vocab_tree_path');
+      if (loopFlag && vocabFlag) {
+        mat.push(loopFlag, '1', vocabFlag, ctx.vocabTree);
+        report('colmap', '🔁 Loop detection ativado (fecha o laço quando o vídeo retorna ao ponto de partida).');
+      } else {
+        report('colmap', '⚠️ Esta build do COLMAP não expõe loop detection no matcher sequencial; seguindo sem.');
+      }
+    }
+  } else if (cfg.loop && !ctx.vocabTree) {
+    report('colmap', '⚠️ Loop detection pedido, mas a vocabulary tree não está disponível — seguindo sem.');
+  }
+
+  report('colmap', `Matching (${cfg.matcher}${cfg.guided ? ' + guided' : ''}${cfg.loop ? ' + loop' : ''})…`);
+  await run(exe, mat, work, l => reportP(report, 'colmap', l));
+
+  // ── 3) Mapper (reconstrução esparsa) ───────────────────────────────────────
+  const hMap = await colmapHelp(exe, 'mapper');
+  fs.mkdirSync(sparseDir, { recursive: true });
+  const map = ['mapper', '--database_path', dbPath, '--image_path', imagesDir, '--output_path', sparseDir];
+  push(map, pickFlag(hMap, '--Mapper.min_num_matches'), cfg.minMatches);
+  push(map, pickFlag(hMap, '--Mapper.tri_min_angle'), cfg.triAngle);
+  if (cfg.ba) {
+    push(map, pickFlag(hMap, '--Mapper.ba_refine_focal_length'), 1);
+    push(map, pickFlag(hMap, '--Mapper.ba_refine_principal_point'), 1);
+    push(map, pickFlag(hMap, '--Mapper.ba_refine_extra_params'), 1);
+  }
+  report('colmap', 'Reconstruindo câmeras (mapper)…');
+  await run(exe, map, work, l => reportP(report, 'colmap', l));
 }
 
 /**
@@ -81,7 +216,7 @@ async function prepareDataset(tools, opts, report, onPreview) {
     } else {
       hasFlat = true;
       args.push('-i', v.path,
-        '-vf', `fps=${fps},scale='min(${opts.maxSize},iw)':-2`,
+        '-vf', `fps=${fps},${scaleFilter(opts.maxSize)}`,
         '-q:v', '2', path.join(imagesDir, `v${vi}_%05d.jpg`));
       await run(tools.ffmpeg, args, work, l => report('frames', l));
     }
@@ -90,18 +225,44 @@ async function prepareDataset(tools, opts, report, onPreview) {
   if (nFrames < 10) throw new Error('Poucos frames extraídos (' + nFrames + '). Aumente o FPS ou use vídeos mais longos.');
   report('frames', `${nFrames} frames extraídos no total.`);
 
-  // 2) Alinhamento de câmeras (COLMAP automatic_reconstructor: mais robusto p/ vídeo)
-  report('colmap', 'Alinhando câmeras (COLMAP, modo vídeo)…');
-  await run(tools.colmap, ['automatic_reconstructor',
-    '--workspace_path', work,
-    '--image_path', imagesDir,
-    '--data_type', 'video',
-    '--quality', 'high',
-    '--single_camera', (hasEquirect && hasFlat) ? '0' : '1',
-    '--camera_model', 'OPENCV',
-    '--sparse', '1',
-    '--dense', '0'
-  ], work, l => report('colmap', l));
+  // 2) Alinhamento de câmeras. Dois caminhos:
+  //    - opts.colmap == null  → automatic_reconstructor (comportamento histórico,
+  //      robusto e sem regressão para quem não mexeu em nada);
+  //    - opts.colmap != null  → pipeline em etapas, que é o único jeito de expor
+  //      max_num_features, peak_threshold, guided matching, DSP-SIFT, affine shape
+  //      e os refinamentos de bundle adjustment (o automatic_reconstructor não
+  //      aceita nenhuma dessas opções).
+  const singleCamera = (hasEquirect && hasFlat) ? '0' : '1';
+  if (opts.colmap) {
+    const cfg = opts.colmap;
+    report('colmap', `Alinhando câmeras (COLMAP em etapas — preset "${cfg.preset}")…`);
+    try {
+      await colmapStaged(tools, cfg, { work, imagesDir, dbPath, sparseDir, singleCamera, vocabTree: tools.vocabTree || null }, report);
+    } catch (e) {
+      // Se algo der errado no caminho ajustado, o alinhamento inteiro seria perdido.
+      // Voltar pro automático custa tempo mas salva a execução — e o aviso deixa
+      // claro que os parâmetros escolhidos não foram os aplicados.
+      report('colmap', '⚠️ O alinhamento ajustado falhou: ' + e.message);
+      report('colmap', '⚠️ Refazendo no modo Automático — os parâmetros de qualidade do COLMAP NÃO foram aplicados.');
+      fs.rmSync(dbPath, { force: true });
+      await run(tools.colmap, ['automatic_reconstructor',
+        '--workspace_path', work, '--image_path', imagesDir, '--data_type', 'video',
+        '--quality', 'high', '--single_camera', singleCamera, '--camera_model', 'OPENCV',
+        '--sparse', '1', '--dense', '0'], work, l => reportP(report, 'colmap', l));
+    }
+  } else {
+    report('colmap', 'Alinhando câmeras (COLMAP, modo vídeo)…');
+    await run(tools.colmap, ['automatic_reconstructor',
+      '--workspace_path', work,
+      '--image_path', imagesDir,
+      '--data_type', 'video',
+      '--quality', 'high',
+      '--single_camera', singleCamera,
+      '--camera_model', 'OPENCV',
+      '--sparse', '1',
+      '--dense', '0'
+    ], work, l => reportP(report, 'colmap', l));
+  }
   if (!fs.existsSync(path.join(sparseDir, '0'))) throw new Error('COLMAP não conseguiu alinhar as câmeras. Grave mais devagar, com boa luz e sobreposição entre os vídeos.');
 
   // Preview: nuvem esparsa + poses
@@ -133,7 +294,7 @@ async function prepareDatasetMast3r(tools, opts, report, onPreview) {
     if (v.start) args.push('-ss', v.start);
     if (v.end) args.push('-to', v.end);
     const fps = Math.max(0.1, parseFloat(v.fps) || (v.interval ? 1 / parseFloat(v.interval) : 2));
-    args.push('-i', v.path, '-vf', `fps=${fps},scale='min(${opts.maxSize || 1600},iw)':-2`, '-q:v', '2', path.join(imagesDir, `v${vi}_%05d.jpg`));
+    args.push('-i', v.path, '-vf', `fps=${fps},${scaleFilter(opts.maxSize)}`, '-q:v', '2', path.join(imagesDir, `v${vi}_%05d.jpg`));
     await run(tools.ffmpeg, args, work, l => report('frames', l));
   }
   const nFrames = fs.readdirSync(imagesDir).filter(f => /\.jpe?g$/i.test(f)).length;
@@ -145,7 +306,7 @@ async function prepareDatasetMast3r(tools, opts, report, onPreview) {
   // module path contains models/ rather than the checkout used as cwd.
   const oldPythonPath = process.env.PYTHONPATH || '';
   await run(tools.mast3rPython, [script, '--images', imagesDir, '--output', work], tools.mast3rRepo,
-    l => report('colmap', l), { PYTHONPATH: tools.mast3rRepo + path.delimiter + oldPythonPath });
+    l => reportP(report, 'colmap', l), { PYTHONPATH: tools.mast3rRepo + path.delimiter + oldPythonPath });
   const sparseTxt = path.join(work, 'sparse_txt');
   const sparse0 = path.join(work, 'sparse', '0');
   if (!fs.existsSync(path.join(sparseTxt, 'images.txt'))) throw new Error('MASt3R terminou sem exportar poses em formato COLMAP.');
@@ -172,9 +333,23 @@ async function prepareDatasetMegaSam(tools, opts, report, onPreview) {
   const pathEnv = portableDir + path.delimiter + (process.env.Path || process.env.PATH || '');
   report('setup', 'Preparando MegaSam portátil (DROID + profundidade + câmera)…');
   report('colmap', 'Estimando movimento, profundidade e poses com MegaSam…');
+  // O DROID-SLAM de dentro do MegaSam aloca um buffer fixo (padrão 1024, veja
+  // camera_tracking_scripts/test_demo.py) pra guardar TODOS os frames durante o
+  // passo de reconstrução completa (traj_filler/terminate), não só os keyframes.
+  // Vídeos com mais frames que esse buffer quebram com
+  // "RuntimeError: The expanded size of the tensor (1024) must match the existing
+  // size (N) at non-singleton dimension 0" — foi exatamente o que aconteceu com um
+  // vídeo de 2484 frames. Nosso próprio megasam_run.py já sabe encaminhar
+  // --batch-size pro run_pipeline.py (que processa em lotes, como mostra o log
+  // "PROCESSING BATCH"), só que a chamada nunca informava um valor — então ele
+  // tratava o vídeo inteiro como um lote só. Aqui fixamos um teto seguro,
+  // bem abaixo dos 1024 do buffer do DROID, pra qualquer vídeo longo ser
+  // automaticamente dividido em lotes menores.
+  const megasamBatchSize = 800;
   await run(tools.megasamPython, [modelScript('megasam_run.py'), '--repo', tools.megasamRepo,
-    '--video', video.path, '--scene', scene, '--output-root', path.join(work, 'megasam_frames'), '--width', '540'],
-    tools.megasamRepo, l => report('colmap', l), { Path: pathEnv });
+    '--video', video.path, '--scene', scene, '--output-root', path.join(work, 'megasam_frames'), '--width', '540',
+    '--batch-size', String(megasamBatchSize)],
+    tools.megasamRepo, l => reportP(report, 'colmap', l), { Path: pathEnv });
   const npz = path.join(tools.megasamRepo, 'outputs_cvd', scene + '_sgd_cvd_hr.npz');
   if (!fs.existsSync(npz)) throw new Error('MegaSam terminou sem o arquivo NPZ de poses/profundidade. Confira o log acima.');
   const sourceFrames = path.join(work, 'megasam_frames', scene);
@@ -187,7 +362,7 @@ async function prepareDatasetMegaSam(tools, opts, report, onPreview) {
   }
   report('frames', `${frames.length} frames MegaSam preparados para treino.`);
   await run(tools.megasamPython, [modelScript('megasam_to_colmap.py'), '--npz', npz,
-    '--images', imagesDir, '--output', work], tools.megasamRepo, l => report('colmap', l), { Path: pathEnv });
+    '--images', imagesDir, '--output', work], tools.megasamRepo, l => reportP(report, 'colmap', l), { Path: pathEnv });
   const sparseTxt = path.join(work, 'sparse_txt');
   if (!fs.existsSync(path.join(sparseTxt, 'images.txt'))) throw new Error('MegaSam não exportou poses em formato COLMAP.');
   const sparse0 = path.join(work, 'sparse', '0');
@@ -199,6 +374,27 @@ async function prepareDatasetMegaSam(tools, opts, report, onPreview) {
   return work;
 }
 
+// Roda `<exe> --help` e devolve o texto (stdout+stderr). Usado pra descobrir quais
+// flags a build do Brush instalada nesta máquina realmente aceita, em vez de chutar.
+// O clap sai com código != 0 em --help dependendo da versão, então resolvemos sempre.
+const _helpCache = new Map();
+function captureHelp(exe) {
+  if (_helpCache.has(exe)) return _helpCache.get(exe);
+  const p = new Promise(resolve => {
+    let out = '';
+    try {
+      const proc = spawn(exe, ['--help'], { windowsHide: true });
+      const t = setTimeout(() => { try { proc.kill(); } catch {} resolve(out); }, 15000);
+      proc.stdout.on('data', d => out += d.toString());
+      proc.stderr.on('data', d => out += d.toString());
+      proc.on('error', () => { clearTimeout(t); resolve(''); });
+      proc.on('close', () => { clearTimeout(t); resolve(out); });
+    } catch { resolve(''); }
+  });
+  _helpCache.set(exe, p);
+  return p;
+}
+
 /** Etapa 3: treino Brush. opts: { workDir, steps } */
 async function trainSplat(tools, opts, report, onSnapshot) {
   const work = opts.workDir;
@@ -206,12 +402,71 @@ async function trainSplat(tools, opts, report, onSnapshot) {
   const exportDir = path.join(work, 'export');
   fs.mkdirSync(exportDir, { recursive: true });
   const every = Math.max(500, Math.round(opts.steps / 20)); // ~20 snapshots
-  const args = [ work,
-    '--total-steps', String(opts.steps),
-    '--export-every', String(every),
-    '--export-path', exportDir,
-    '--export-name', 'passo_{iter}.ply'
-  ];
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Descoberta de flags. Historicamente este código passava `--total-steps`, que
+  // NÃO existe no Brush (o nome real é `--total-train-iters`). Como o clap aborta
+  // com erro em flag desconhecida, a chamada inteira falhava e caía no fallback
+  // "modo padrão" — que roda o Brush SEM contagem de passos. Resultado: o preset
+  // de qualidade escolhido pelo usuário (50k/75k/100k) era silenciosamente
+  // ignorado e o treino sempre rodava o padrão do Brush (30k). Era a maior causa
+  // de "a qualidade não melhora mesmo aumentando os passos".
+  // Agora lemos o --help da build instalada e usamos os nomes que ela aceita.
+  const help = await captureHelp(tools.brush);
+  const has = flag => help.includes(flag);
+  const knowsFlags = has('--export-path'); // sanity: o --help foi lido mesmo?
+  const stepsFlag = has('--total-train-iters') ? '--total-train-iters'
+                  : has('--total-steps') ? '--total-steps' : null;
+
+  const args = [work];
+  if (stepsFlag) args.push(stepsFlag, String(opts.steps));
+  else if (knowsFlags) report('train', '⚠️ Esta build do Brush não expõe a flag de número de passos; ela vai usar o padrão dela.');
+  args.push('--export-every', String(every), '--export-path', exportDir, '--export-name', 'passo_{iter}.ply');
+
+  // Mip-Splatting: o Brush já traz isso embutido (`--render-mode mip`), mas o app
+  // nunca ativava — treinava sempre no modo Default. O modo Mip aplica o filtro
+  // passa-baixa dependente do footprint do splat na tela, que é justamente o que
+  // remove o "shimmering" ao mover a câmera e melhora nitidez ao afastar/zoom.
+  if (has('--render-mode')) {
+    args.push('--render-mode', 'mip');
+    report('train', '✨ Mip-Splatting ativado (anti-aliasing por footprint) — menos shimmering e mais nitidez a distância.');
+  }
+
+  // TETO DE RESOLUÇÃO ESCONDIDO: o Brush tem `--max-resolution` com padrão 1920 e
+  // reduz qualquer imagem acima disso ao CARREGAR o dataset. Como o app nunca
+  // passava essa flag, extrair frames em 4K não adiantava nada — o Brush
+  // silenciosamente treinava a 1920 mesmo assim. Agora informamos a resolução
+  // escolhida pelo usuário, então 2.5K/4K realmente chegam ao treino.
+  if (has('--max-resolution')) {
+    const maxRes = Math.max(256, Math.round(opts.maxSize || 1600));
+    args.push('--max-resolution', String(maxRes));
+    if (maxRes > 1920) report('train', `🔍 Treinando em alta resolução (${maxRes}px no lado maior). Isso usa bem mais VRAM e tempo — se faltar memória, reduza o FPS de extração ou a resolução.`);
+  }
+
+  // Nitidez extra (LPIPS): perda perceptual baseada numa VGG — compara as imagens
+  // pelo que o olho percebe em vez de pixel a pixel. O Brush traz isso embutido
+  // (crate `lpips`, sem download em runtime) mas com peso padrão 0.0, ou seja,
+  // desligado. Só entra se o usuário escolher explicitamente, porque encarece o
+  // treino e muda a métrica (atrapalha comparações A/B).
+  // Obs.: no Brush o LPIPS só roda em desktop — em WASM ele é ignorado.
+  const lpips = Number(opts.lpips) || 0;
+  if (lpips > 0 && has('--lpips-loss-weight')) {
+    args.push('--lpips-loss-weight', String(lpips));
+    report('train', `🔎 Nitidez extra (LPIPS ${lpips}) ativada — treino mais lento, textura fina mais definida.`);
+  } else if (lpips > 0) {
+    report('train', '⚠️ Esta build do Brush não suporta a nitidez extra (LPIPS); seguindo sem ela.');
+  }
+
+  // O padrão de `growth_stop_iter` do Brush é 15000 e NÃO acompanha o total de
+  // passos: num treino de 100k, a densificação parava com 15% do caminho andado e
+  // os outros 85k passos só refinavam um conjunto de Gaussians que já tinha
+  // parado de crescer. Escalar com o total é o que faz "mais passos" virar de
+  // fato "mais qualidade".
+  if (has('--growth-stop-iter')) {
+    const growthStop = Math.max(15000, Math.round(opts.steps * 0.5));
+    args.push('--growth-stop-iter', String(growthStop));
+    report('train', `📈 Densificação ativa até o passo ${growthStop} (escalada com o total de ${opts.steps}).`);
+  }
   // monitor: relógio + snapshots parciais → nunca parece travado
   const t0 = Date.now();
   let lastSeen = '';
@@ -234,11 +489,22 @@ async function trainSplat(tools, opts, report, onSnapshot) {
       report('train', `⏱ ${min} min — treinando (primeiro snapshot em ~${every} passos)…`);
     }
   }, 5000);
+  // Registra a linha de comando final no log. Sem isso não dá pra saber, olhando
+  // o log de um treino, se os parâmetros de qualidade realmente foram aplicados ou
+  // se caiu no fallback — que foi exatamente como o bug do `--total-steps` passou
+  // despercebido por tanto tempo.
+  report('train', '▶ Brush: ' + args.slice(1).join(' '));
+
   try {
-    await run(tools.brush, args, work, l => report('train', l));
+    await run(tools.brush, args, work, l => reportP(report, 'train', l));
   } catch (e) {
-    report('train', 'Aviso: flags rejeitadas, tentando modo padrão do Brush… (' + e.message + ')');
-    await run(tools.brush, [work, '--export-path', exportDir], work, l => report('train', l));
+    // Este fallback roda o Brush sem NENHUM ajuste — inclusive sem o número de
+    // passos escolhido. Antes ele era silencioso e mascarava exatamente o bug do
+    // `--total-steps`; agora avisa em alto e bom som que a qualidade vai ser a
+    // padrão do Brush, não a que o usuário pediu.
+    report('train', '⚠️ O Brush recusou os parâmetros de qualidade: ' + e.message);
+    report('train', '⚠️ Rodando no modo padrão do Brush — o preset de qualidade escolhido NÃO será aplicado. Atualize o Brush para a versão mais recente.');
+    await run(tools.brush, [work, '--export-path', exportDir], work, l => reportP(report, 'train', l));
   } finally { clearInterval(mon); }
   const plys = [];
   (function walk(d){ for (const e of fs.readdirSync(d, { withFileTypes: true })) {
@@ -306,4 +572,4 @@ async function train3dgrut(tools, opts, report, onSnapshot) {
   return { ply: found[0], usd: usd[0] || null };
 }
 
-module.exports = { prepareDataset, prepareDatasetMast3r, prepareDatasetMegaSam, trainSplat, trainPpisp, train3dgrut, setProcessTracker };
+module.exports = { prepareDataset, prepareDatasetMast3r, prepareDatasetMegaSam, trainSplat, trainPpisp, train3dgrut, setProcessTracker, parseLineProgress, reportP };
