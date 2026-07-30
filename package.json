@@ -1,7 +1,7 @@
 {
   "name": "bruxosplat",
   "productName": "BruxoSplat",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Vídeo → 3D Gaussian Splatting no seu PC, com a sua GPU. Por Bruxos do VFX.",
   "main": "main.js",
   "author": "Bruxos do VFX",

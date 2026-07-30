@@ -549,6 +549,49 @@ async function trainPpisp(tools, opts, report, onSnapshot) {
   throw new Error('Treino PPISP terminou mas não gerou final.ply.');
 }
 
+/**
+ * Etapa 3 alternativa: Triangle Splatting (malha de triângulos em vez de Gaussians).
+ *
+ * Consome o MESMO projeto COLMAP dos outros motores, então não exige refazer o
+ * alinhamento. A saída, porém, é diferente: uma malha .off (COFF) com cor por face,
+ * não um .ply de Gaussians. Isso significa que ela abre em Blender/Unity/Unreal e
+ * pode ser carregada como geometria comum no navegador — mas NÃO abre nos
+ * visualizadores de splat, incluindo o modo padrão do WebEDIT.
+ */
+async function trainTriangleSplat(tools, opts, report) {
+  if (!tools.trianglePython || !tools.triangleRepo) throw new Error('Ambiente do Triangle Splatting não foi preparado.');
+  const work = opts.workDir;
+  if (!fs.existsSync(path.join(work, 'sparse', '0'))) {
+    throw new Error('Triangle Splatting precisa do modelo COLMAP em sparse/0. Use o alinhamento COLMAP.');
+  }
+  const exportDir = path.join(work, 'triangle_export');
+  fs.mkdirSync(exportDir, { recursive: true });
+
+  report('train', 'Treinando Triangle Splatting (malha de triângulos)…');
+  report('train', 'ℹ️ A saída é uma malha .off, não um .ply de Gaussians — abre em Blender/Unity/Unreal.');
+
+  const t0 = Date.now();
+  const mon = setInterval(() => {
+    report('train', `⏱ ${((Date.now() - t0) / 60000).toFixed(1)} min — treinando triângulos…`);
+  }, 15000);
+
+  const args = [modelScript('trianglesplat_train.py'),
+    '--repo', tools.triangleRepo,
+    '--source', work,
+    '--output', exportDir,
+    '--iterations', String(opts.steps || 30000),
+    '--mesh-name', 'malha.off'];
+  // Cenas externas usam hiperparâmetros próprios no repositório oficial.
+  if (opts.outdoor) args.push('--outdoor');
+
+  try { await run(tools.trianglePython, args, work, l => reportP(report, 'train', l)); }
+  finally { clearInterval(mon); }
+
+  const mesh = path.join(exportDir, 'malha.off');
+  if (!fs.existsSync(mesh)) throw new Error('Triangle Splatting terminou sem gerar a malha .off. Confira o log acima.');
+  return mesh;
+}
+
 async function train3dgrut(tools, opts, report, onSnapshot) {
   const work = opts.workDir, exportDir = path.join(work, '3dgrut_export');
   if (!tools.grutPython || !tools.grutRepo) throw new Error('Backend 3DGRUT não foi preparado.');
@@ -572,4 +615,4 @@ async function train3dgrut(tools, opts, report, onSnapshot) {
   return { ply: found[0], usd: usd[0] || null };
 }
 
-module.exports = { prepareDataset, prepareDatasetMast3r, prepareDatasetMegaSam, trainSplat, trainPpisp, train3dgrut, setProcessTracker, parseLineProgress, reportP };
+module.exports = { prepareDataset, prepareDatasetMast3r, prepareDatasetMegaSam, trainSplat, trainPpisp, trainTriangleSplat, train3dgrut, setProcessTracker, parseLineProgress, reportP };

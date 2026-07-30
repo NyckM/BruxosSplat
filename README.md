@@ -1,4 +1,4 @@
-# 🔮 BruxoSplat v1.2.0
+# 🔮 BruxoSplat v1.3.0
 
 **Vídeo → 3D Gaussian Splatting no seu PC, usando a sua GPU.** Gratuito e open source, por **Bruxos do VFX**.
 
@@ -8,7 +8,7 @@ Uma alternativa gratuita ao Postshot: escolha um vídeo, clique em *Iniciar Trei
 
 ---
 
-## 🆕 O que mudou na v1.2.0
+## 🆕 O que mudou na v1.3.0
 
 Esta versão é focada em **qualidade de treino**. Investigando por que os splats saíam com menos definição que outros aplicativos, encontramos três bugs no caminho padrão — não eram limitações de técnica, eram chamadas erradas ao motor.
 
@@ -27,6 +27,17 @@ O Brush reduz qualquer imagem acima de `--max-resolution` (padrão **1920**) ao 
 Junto veio a correção do filtro de extração, que limitava a **largura** em vez do lado maior (apesar do rótulo dizer "lado maior"). Em vídeo retrato isso deixava passar resolução bem acima da pedida, gastando VRAM à toa.
 
 > **Dica:** 4K multiplica o consumo de VRAM e o tempo do COLMAP. Se faltar memória, reduza o **FPS de extração** (menos frames) antes de reduzir a resolução — poucos frames em 4K costuma render mais nitidez que muitos frames em 1080p.
+
+### Seleção do trecho do vídeo com preview
+
+Antes era preciso digitar início e fim em campos de hora/minuto/segundo **sem ver o vídeo** — na prática, adivinhando onde ficava o trecho bom. Agora cada vídeo da lista tem um botão **🎬** que abre uma janela de preview com o player e uma **timeline com duas alças arrastáveis** para marcar início e fim. Dá para clicar em qualquer ponto da barra para navegar e usar o play, que **repete em laço apenas o trecho marcado** — assim você confere exatamente o corte antes de aplicar.
+
+Os campos hh:mm:ss continuam lá e são preenchidos ao aplicar, então nada muda no que é entregue ao ffmpeg.
+
+### Controles de visualização no viewport
+
+- **Estilos da nuvem de pontos:** Nuvem, Anéis, Centros, **Depth cinza** e **Depth colorido** — úteis para inspecionar a reconstrução por profundidade em vez de só por cor.
+- **Projeção Perspectiva / Ortográfica**, para conferir alinhamento e proporções sem distorção de perspectiva.
 
 ### Nitidez extra (LPIPS)
 
@@ -66,7 +77,7 @@ O [3dGS_WebEDIT](https://github.com/NyckM/3dGS_WebEDIT) recebeu abas novas de **
 |---|---|---|
 | 1 | **ffmpeg** | extrai frames do vídeo |
 | 2 | **COLMAP**, **DPVO**, **MASt3R** ou **MegaSam** | calcula a posição das câmeras |
-| 3 | **[Brush](https://github.com/ArthurBrussee/brush)**, **GSplat + PPISP** ou **3DGRUT** | treina o Gaussian Splatting na sua GPU |
+| 3 | **[Brush](https://github.com/ArthurBrussee/brush)**, **GSplat + PPISP**, **3DGRUT** ou **Triangle Splatting** | treina o Gaussian Splatting na sua GPU |
 | 4 | **3dGS_WebEDIT** | abre o `.ply` no editor embutido |
 
 <img width="1585" height="1015" alt="Alinhamento de câmera" src="https://github.com/user-attachments/assets/4965aa7f-04b6-43df-9a68-f6bc4279c2a0" />
@@ -83,6 +94,7 @@ O [3dGS_WebEDIT](https://github.com/NyckM/3dGS_WebEDIT) recebeu abas novas de **
 - **Brush** — padrão, multiplataforma (roda em NVIDIA, AMD, Intel e Apple Silicon via WebGPU). É o motor recomendado.
 - **GSplat + PPISP** — experimental, NVIDIA/CUDA. Corrige exposição, vinheta e cor entre frames. Traz densificação MCMC, learning rate por atributo, SH progressivo, anti-aliasing, refinamento de câmera e *importance sampling* de frames.
 - **3DGRUT / Ray Tracing** — experimental, RTX.
+- **Triangle Splatting** — experimental, NVIDIA/CUDA. A primitiva é o **triângulo**, não o Gaussian, então a saída é uma **malha de verdade** (`.off` em formato COFF, com cor por face) que abre em Blender, Unity, Unreal e MeshLab sem shader especial. Consome o mesmo projeto COLMAP dos outros motores. ⚠️ A saída **não é um splat**: não abre no editor de pontos nem no WebEDIT. ⚠️ O submódulo `simple-knn` vem da INRIA sob licença **não comercial**, e o conjunto herda essa restrição.
 
 ---
 
@@ -141,7 +153,7 @@ Ainda não há build oficial para Linux. O app depende de binários pré-compila
 
 ### Windows
 
-**Instalador pronto (recomendado):** em **[Releases](../../releases)**, baixe `BruxoSplat-Setup-1.2.0.exe` (instalador) ou `BruxoSplat-Portable-1.2.0.exe` (só executar). Não precisa de Node, Python nem terminal.
+**Instalador pronto (recomendado):** em **[Releases](../../releases)**, baixe `BruxoSplat-Setup-1.3.0.exe` (instalador) ou `BruxoSplat-Portable-1.3.0.exe` (só executar). Não precisa de Node, Python nem terminal.
 
 **A partir do código:** baixe o ZIP (**Code → Download ZIP**) para `C:\BruxoSplat`, rode **`INSTALAR.bat`** uma vez, depois **`RODAR.bat`** (ou `BruxoSplat.vbs`, que abre sem janela de terminal).
 
@@ -174,7 +186,7 @@ Na primeira execução o app baixa sozinho ffmpeg, COLMAP e Brush (`%APPDATA%\Br
 ## Como usar
 
 1. Grave uma cena com movimento **lento**, boa luz, sem borrão e com sobreposição entre os quadros. Para objetos, faça uma órbita de 30 segundos a 2 minutos.
-2. Importe o vídeo e escolha FPS, resolução, alinhamento e motor de treino.
+2. Importe o vídeo e escolha FPS, resolução, alinhamento e motor de treino. Use o botão **🎬** ao lado do arquivo para assistir ao vídeo e marcar início e fim direto na timeline.
 3. Clique em **Iniciar Treino**. O log mostra o progresso; use **Copiar log** para enviar um diagnóstico.
 4. O `.ply` é salvo em `Documentos\BruxoSplat` e abre no editor. Sequências 4D aparecem na timeline embaixo.
 
@@ -187,6 +199,10 @@ Para DPVO, o app mostra a relação entre frames extraídos e poses usadas. Exem
 Todo alinhamento que gera poses (incluindo DPVO e MegaSam) salva `camera_path.json` dentro do projeto. Ao concluir o treino, uma cópia chamada `NomeDoSplat.camera.json` é exportada ao lado do PLY, preservando intrínsecas, poses COLMAP originais, posição, direção e up de cada frame.
 
 O botão de trajeto no viewport reproduz essa câmera. Ao abrir o PLY no 3dGS_WebEDIT pelo BruxoSplat, o mesmo arquivo é enviado ao editor e aparece o botão **Câmera virtual**.
+
+Se você quiser usar esse trajeto em outra engine (three.js, Babylon, WebGL puro, Blender), veja **[CAMERA_PATH.md](CAMERA_PATH.md)** — documenta o formato completo, as convenções de cada campo, a conversão de coordenadas correta (rotação de 180° em X, **não** apenas negar o Y) e um exemplo pronto em three.js.
+
+A partir da v1.3.0, quando você move/gira/escala os Gaussians com o gizmo e salva, a **mesma transformação é aplicada às poses de câmera** antes de gravar o sidecar. Antes o arquivo era só copiado, e PLY e câmera saíam desalinhados sempre que o gizmo era usado.
 
 ### Projeto `.bvfx`
 

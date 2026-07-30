@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.2.0 — 2026-07-28
+## 1.3.0 — 2026-07-30
 
 Versão focada em **qualidade de treino**. A investigação de por que os splats saíam com menos
 definição que outros aplicativos encontrou três bugs no caminho padrão — não eram limitações de
@@ -32,11 +32,62 @@ técnica, eram chamadas erradas ao motor.
 - **DPVO:** campo de visão agora é configurável. O DPVO não lê o FOV real do vídeo e assumia 60°
   fixo, o que produzia câmera e trajetória com escala/proporção incompatíveis com a filmagem.
 
+### Novo — Triangle Splatting (motor experimental que gera malha)
+
+Novo motor de treino baseado em **Triangle Splatting** (3DV 2026, Univ. de Liège/KAUST/Oxford).
+A primitiva é o **triângulo**, não o Gaussian — então a saída é uma **malha de verdade**
+(`.off` no formato COFF, com cor por face), que abre em Blender, Unity, Unreal e MeshLab
+sem shader especial.
+
+- Consome o **mesmo projeto COLMAP** dos outros motores; não precisa refazer o alinhamento.
+- Usa `train_game_engine.py` do repositório oficial, que poda triângulos de baixa opacidade e
+  força opacidade alta no fim do treino, deixando a geometria compatível com game engines.
+- Ambiente Python próprio (`pyenv_trianglesplat`, torch 2.4 + CUDA 12.4), com os dois módulos
+  CUDA do projeto compilados na primeira instalação.
+- Requer GPU NVIDIA; aparece desabilitado no macOS junto dos demais motores CUDA.
+
+⚠️ **A saída não é um splat.** O `.off` não abre no editor de pontos nem no WebEDIT — o app
+salva o arquivo e avisa. Um carregador de malha no WebEDIT fica para uma próxima etapa.
+
+⚠️ **Licença:** o núcleo é Apache-2.0, mas o submódulo `simple-knn` vem da INRIA sob licença
+**não-comercial**, e o conjunto herda essa restrição — mesma situação do MASt3R.
+
+### Corrigido — exportação da câmera virtual
+
+- **O sidecar `*.camera.json` era apenas copiado ao salvar uma edição.** Como o `edSave()` grava a
+  transformação do gizmo dentro do PLY (`p' = q·(p·s) + t`), mover/girar/escalar os Gaussians fazia
+  o PLY e a câmera deixarem de casar em qualquer visualizador externo. Agora a mesma transformação
+  é aplicada às poses: centro da câmera, direção, up, `quaternionWorldToCamera` e
+  `translationWorldToCamera`.
+- **O campo `coordinateSystem` do JSON descrevia a conversão errada.** Dizia "display flips Y",
+  quando o correto é uma rotação de 180° em torno de X — que nega Y **e** Z. Negar só o Y é um
+  espelhamento e inverte a lateralidade da cena; foi exatamente o bug que existia no visualizador.
+  O arquivo agora traz também um bloco `conventions` explicando cada campo.
+- Novo documento **[CAMERA_PATH.md](CAMERA_PATH.md)** com o formato completo e um exemplo em three.js.
+
 ### Corrigido — macOS
 
 - `mac.identity` mudou de `null` (assinatura desligada) para `"-"` (ad-hoc). Sem assinatura alguma,
   binários em Apple Silicon não executam e o macOS oferece mover o app para o Lixo — era a causa do
   app "sumir" após o download.
+
+### Novo — seleção de trecho do vídeo com preview
+
+Antes era preciso digitar início e fim em campos de hora/minuto/segundo, sem ver o vídeo — na
+prática, adivinhando. Agora cada vídeo importado tem um botão 🎬 que abre uma janela de preview com:
+
+- player do vídeo e uma **timeline com duas alças arrastáveis** para marcar início e fim;
+- clique em qualquer ponto da barra para navegar;
+- **play em laço apenas dentro do trecho marcado**, para conferir o corte antes de aplicar.
+
+Os campos hh:mm:ss continuam existindo e são preenchidos ao aplicar o corte — o formato entregue ao
+ffmpeg não mudou, então o resto do pipeline segue igual.
+
+### Novo — controles de visualização do viewport
+
+- **Estilos da nuvem de pontos:** Nuvem, Anéis, Centros, Depth cinza e Depth colorido, para inspecionar
+  a reconstrução por profundidade em vez de só por cor.
+- **Projeção Perspectiva / Ortográfica**, útil para conferir alinhamento e proporções sem distorção.
 
 ### Novo
 

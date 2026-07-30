@@ -9,7 +9,9 @@ contextBridge.exposeInMainWorld('bruxo', {
   train: opts => ipcRenderer.invoke('train', opts),
   abortWork: () => ipcRenderer.invoke('abort-work'),
   openFolder: p => ipcRenderer.invoke('open-folder', p),
-  savePly: (buf, name) => ipcRenderer.invoke('save-ply', buf, name),
+  // xform: { s, q:[w,x,y,z], t:[x,y,z] } — a transformação do gizmo já gravada no
+  // PLY, para que o sidecar da câmera receba a mesma e continue alinhado.
+  savePly: (buf, name, xform) => ipcRenderer.invoke('save-ply', buf, name, xform),
   modelList: () => ipcRenderer.invoke('model-list'),
   modelInstall: k => ipcRenderer.invoke('model-install', k),
   modelRun: (k, input) => ipcRenderer.invoke('model-run', k, input),
@@ -23,6 +25,8 @@ contextBridge.exposeInMainWorld('bruxo', {
   convertSeqSplat: () => ipcRenderer.invoke('convert-seq-splat'),
   onDone4d: cb => ipcRenderer.on('done4d', (_e, d) => cb(d)),
   platform: process.platform,
+  macToolsStatus: () => ipcRenderer.invoke('mac-tools-status'),
+  macToolsInstall: () => ipcRenderer.invoke('mac-tools-install'),
   getVersion: () => ipcRenderer.invoke('get-version'),
   getLang: () => ipcRenderer.invoke('get-lang'),
   setLang: lang => ipcRenderer.invoke('set-lang', lang),

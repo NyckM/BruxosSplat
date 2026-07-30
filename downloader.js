@@ -24,14 +24,41 @@ function hasNvidiaGpu() {
   try { execSync('nvidia-smi', { stdio: 'ignore' }); return true; } catch { return false; }
 }
 
+// Um app aberto pelo Finder no macOS NÃO herda o PATH do terminal: ele recebe um
+// PATH mínimo (/usr/bin:/bin:/usr/sbin:/sbin) que não inclui os diretórios do
+// Homebrew. Resultado: `which ffmpeg` falhava mesmo com o ffmpeg instalado, e o app
+// dizia que o Homebrew não existia. Por isso, além do PATH, olhamos direto nos
+// lugares padrão do Homebrew.
+const MAC_EXTRA_BINS = ['/opt/homebrew/bin', '/usr/local/bin', '/opt/local/bin'];
+
 function which(cmd) {
   try {
     const out = execFileSync(IS_MAC ? 'which' : 'where', [cmd], { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
-    return out.split('\n')[0].trim() || null;
-  } catch { return null; }
+    const hit = out.split('\n')[0].trim();
+    if (hit) return hit;
+  } catch { /* segue para a busca manual abaixo */ }
+  if (IS_MAC) {
+    for (const dir of MAC_EXTRA_BINS) {
+      const p = path.join(dir, cmd);
+      try { if (fs.existsSync(p)) return p; } catch {}
+    }
+  }
+  return null;
 }
 
 function hasBrew() { return !!which('brew'); }
+
+/**
+ * PATH ampliado para rodar subprocessos no macOS: junta o PATH atual com os
+ * diretórios do Homebrew. Necessário porque o `brew install` e o próprio COLMAP
+ * chamam outros binários entre si.
+ */
+function macEnvWithBrew() {
+  if (!IS_MAC) return process.env;
+  const atual = (process.env.PATH || '').split(':');
+  const juntos = [...new Set([...MAC_EXTRA_BINS, ...atual])].filter(Boolean);
+  return { ...process.env, PATH: juntos.join(':') };
+}
 
 function download(url, dest, onProgress) {
   return new Promise((resolve, reject) => {
@@ -88,21 +115,76 @@ async function fetchJson(url) {
 }
 
 /** Garante ffmpeg/COLMAP no macOS via Homebrew (instala sozinho se o Homebrew já estiver presente). */
-function ensureBrewPackage(pkg, binName, sendStatus) {
-  const found = which(binName);
-  if (found) return found;
+/**
+ * Verifica de uma vez TUDO que o macOS precisa do Homebrew e, se faltar algo, dá
+ * uma única instrução com um comando pronto para copiar.
+ *
+ * Antes a checagem era pacote a pacote: o usuário instalava o ffmpeg, tentava de
+ * novo, e só então descobria que o COLMAP também faltava. Duas rodadas de erro
+ * para uma informação que dava para dar de uma vez.
+ */
+/**
+ * Monta o comando que instala tudo que falta no macOS (Homebrew, se preciso, e
+ * depois os pacotes). Devolve null quando não há nada a fazer.
+ *
+ * Por que não instalamos direto de dentro do app: o instalador do Homebrew pede
+ * senha de administrador e uma confirmação com Enter. Um app aberto pelo Finder
+ * não tem terminal onde digitar isso — ele ficaria travado esperando. Então o app
+ * abre o Terminal já com o comando pronto, e a pessoa só confirma.
+ */
+function macInstallCommand() {
+  if (!IS_MAC) return null;
+  const precisa = [{ pkg: 'ffmpeg', bin: 'ffmpeg' }, { pkg: 'colmap', bin: 'colmap' }];
+  const faltando = precisa.filter(p => !which(p.bin)).map(p => p.pkg);
+  const temBrew = hasBrew();
+  if (temBrew && !faltando.length) return null;
+
+  const partes = [];
+  if (!temBrew) {
+    partes.push('/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"');
+    // O instalador não deixa o brew no PATH da sessão atual; isso resolve para o
+    // comando seguinte funcionar na mesma janela, nos dois tipos de Mac.
+    partes.push('eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv)"');
+  }
+  partes.push('brew install ' + (faltando.length ? faltando.join(' ') : 'ffmpeg colmap'));
+  return { comando: partes.join(' && '), faltando, temBrew };
+}
+
+function ensureMacTools(sendStatus) {
+  const precisa = [{ pkg: 'ffmpeg', bin: 'ffmpeg' }, { pkg: 'colmap', bin: 'colmap' }];
+  const faltando = precisa.filter(p => !which(p.bin));
+  if (!faltando.length) {
+    return { ffmpeg: which('ffmpeg'), colmap: which('colmap') };
+  }
+  const lista = faltando.map(f => f.pkg).join(' ');
+
   if (!hasBrew()) {
     throw new Error(
-      `${binName} não encontrado e o Homebrew não está instalado. ` +
-      `Instale o Homebrew (https://brew.sh) e depois rode: brew install ${pkg} — ou rode o INSTALAR.command de novo.`
+      'Faltam ferramentas que o BruxoSplat usa no macOS: ' + lista + '.\n' +
+      '\nElas não têm build oficial para Mac (o COLMAP só publica binário Windows), ' +
+      'então a instalação é pelo Homebrew, que é o gerenciador de pacotes padrão do macOS.\n' +
+      '\nCole estes dois comandos no Terminal, um de cada vez:\n' +
+      '\n1) Instalar o Homebrew:\n' +
+      '   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"\n' +
+      '\n2) Instalar as ferramentas:\n' +
+      '   brew install ' + lista + '\n' +
+      '\nDepois feche e abra o BruxoSplat de novo.'
     );
   }
-  sendStatus(`Instalando ${pkg} via Homebrew (brew install ${pkg})…`, 0);
-  const r = spawnSync('brew', ['install', pkg], { stdio: 'inherit' });
-  if (r.status !== 0) throw new Error(`"brew install ${pkg}" falhou (código ${r.status}). Tente rodar manualmente no Terminal.`);
-  const bin = which(binName);
-  if (!bin) throw new Error(`${binName} ainda não foi encontrado no PATH depois do brew install — abra um novo terminal/reinicie o app.`);
-  return bin;
+
+  sendStatus('Instalando via Homebrew: ' + lista + ' — pode demorar alguns minutos…', 0);
+  const brew = which('brew');
+  const r = spawnSync(brew, ['install', ...faltando.map(f => f.pkg)], { stdio: 'inherit', env: macEnvWithBrew() });
+  if (r.status !== 0) {
+    throw new Error('"brew install ' + lista + '" falhou (código ' + r.status + ').\n' +
+      '\nRode manualmente no Terminal para ver o erro completo:\n   brew install ' + lista);
+  }
+  const aindaFalta = precisa.filter(p => !which(p.bin)).map(p => p.bin);
+  if (aindaFalta.length) {
+    throw new Error('Depois do brew install, ainda não encontrei: ' + aindaFalta.join(', ') + '.\n' +
+      '\nFeche e abra o BruxoSplat (o app precisa reler os caminhos). Se persistir, confirme no Terminal com: which ' + aindaFalta.join(' '));
+  }
+  return { ffmpeg: which('ffmpeg'), colmap: which('colmap') };
 }
 
 /** Garante que todas as ferramentas existem. Retorna {ffmpeg, colmap, brush} (caminhos dos binários). */
@@ -112,11 +194,12 @@ async function ensureTools(sendStatus) {
   const state = {};
 
   if (IS_MAC) {
-    // ffmpeg e COLMAP não têm build Mac oficial pra baixar direto — usa Homebrew (padrão do ecossistema)
-    sendStatus('Verificando ffmpeg (Homebrew)…', 0);
-    state.ffmpeg = ensureBrewPackage('ffmpeg', 'ffmpeg', sendStatus);
-    sendStatus('Verificando COLMAP (Homebrew)…', 0);
-    state.colmap = ensureBrewPackage('colmap', 'colmap', sendStatus);
+    // ffmpeg e COLMAP não têm build Mac oficial pra baixar direto — usa Homebrew.
+    // Verificação única: se faltar algo, o usuário recebe tudo numa instrução só.
+    sendStatus('Verificando ffmpeg e COLMAP…', 0);
+    const macTools = ensureMacTools(sendStatus);
+    state.ffmpeg = macTools.ffmpeg;
+    state.colmap = macTools.colmap;
   } else {
     // ffmpeg (Windows)
     state.ffmpeg = findExe(dir, 'ffmpeg.exe');
@@ -207,4 +290,4 @@ async function ensureVocabTree(sendStatus) {
   }
 }
 
-module.exports = { ensureTools, ensureVocabTree, TOOLS_DIR, IS_MAC, hasNvidiaGpu };
+module.exports = { ensureTools, ensureVocabTree, macInstallCommand, TOOLS_DIR, IS_MAC, hasNvidiaGpu };

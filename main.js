@@ -4,9 +4,9 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
-const { ensureTools, ensureVocabTree, hasNvidiaGpu } = require('./downloader');
-const { installModel, runModel, ensureSplat4dCli, ensureConvertDeps, ensurePpispTrainer, ensureDpvoDirect, ensureMast3r, ensure3dgrut, MODELS } = require('./envman');
-const { prepareDataset, prepareDatasetMast3r, prepareDatasetMegaSam, trainSplat, trainPpisp, train3dgrut, setProcessTracker: setPipelineProcessTracker } = require('./pipeline');
+const { ensureTools, ensureVocabTree, macInstallCommand, hasNvidiaGpu } = require('./downloader');
+const { installModel, runModel, ensureSplat4dCli, ensureConvertDeps, ensurePpispTrainer, ensureDpvoDirect, ensureMast3r, ensureTriangleSplatting, ensure3dgrut, MODELS } = require('./envman');
+const { prepareDataset, prepareDatasetMast3r, prepareDatasetMegaSam, trainSplat, trainPpisp, trainTriangleSplat, train3dgrut, setProcessTracker: setPipelineProcessTracker } = require('./pipeline');
 const { prepareDatasetDPVO, setProcessTracker: setDpvoProcessTracker } = require('./dpvo');
 const modelScript = name => {
   const unpacked = process.resourcesPath && path.join(process.resourcesPath, 'app.asar.unpacked', 'models', name);
@@ -110,9 +110,117 @@ function naturalSort(a, b) {
   return 0;
 }
 
+// ===== Render local (WebEDIT -> "Vídeo CFR — FFmpeg local") =====
+// O viewer manda um ZIP (sem compressão) com frames/*.png + manifest.json via
+// POST /render?fps=&codec=; aqui a gente extrai, chama o ffmpeg já baixado pelo
+// downloader.js e devolve {ok, url, name} apontando pro GET /render-output/<arquivo>.
+const extractZip = require('extract-zip');
+const os = require('os');
+
+function renderOutputDir() {
+  const dir = path.join(app.getPath('temp'), 'bruxosplat-render-output');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+// codec do popover (render-codec) -> args de encode do ffmpeg + extensão do arquivo final
+function ffmpegCodecArgs(codec) {
+  switch (codec) {
+    case 'hevc': return { args: ['-c:v', 'libx265', '-tag:v', 'hvc1', '-pix_fmt', 'yuv420p', '-crf', '20', '-preset', 'medium'], ext: 'mp4' };
+    case 'prores': return { args: ['-c:v', 'prores_ks', '-profile:v', '3', '-pix_fmt', 'yuv422p10le'], ext: 'mov' };
+    default: return { args: ['-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '18', '-preset', 'medium'], ext: 'mp4' };
+  }
+}
+
+function runFfmpeg(exe, args, cwd) {
+  return new Promise((resolve, reject) => {
+    const p = spawn(exe, args, { cwd, windowsHide: true });
+    trackChild(p);
+    let log = '';
+    p.stderr.on('data', d => { log += d.toString(); });
+    p.on('error', err => { trackChild(null, p); reject(err); });
+    p.on('close', code => { trackChild(null, p); code === 0 ? resolve() : reject(new Error('ffmpeg saiu com código ' + code + ': ' + log.slice(-800))); });
+  });
+}
+
+function readRequestBody(req, maxBytes = 2 * 1024 * 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    const chunks = []; let size = 0;
+    req.on('data', d => {
+      size += d.length;
+      if (size > maxBytes) { reject(new Error('upload grande demais')); req.destroy(); return; }
+      chunks.push(d);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+function renderCors(res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+}
+
+async function handleRenderRequest(req, res, urlObj) {
+  renderCors(res);
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'bx-render-'));
+  try {
+    const fps = Math.max(1, parseInt(urlObj.searchParams.get('fps'), 10) || 24);
+    const codec = urlObj.searchParams.get('codec') || 'h264';
+    const body = await readRequestBody(req);
+    if (!body.length) throw new Error('corpo do upload vazio');
+
+    const zipPath = path.join(work, 'frames.zip');
+    fs.writeFileSync(zipPath, body);
+    const framesDir = path.join(work, 'extracted');
+    fs.mkdirSync(framesDir, { recursive: true });
+    await extractZip(zipPath, { dir: framesDir });
+
+    const seqDir = fs.existsSync(path.join(framesDir, 'frames')) ? path.join(framesDir, 'frames') : framesDir;
+    const hasFrames = fs.existsSync(path.join(seqDir, 'frame_000000.png'));
+    if (!hasFrames) throw new Error('sequência de frames não encontrada no zip enviado');
+
+    const tools = await getTools();
+    if (!tools || !tools.ffmpeg) throw new Error('ffmpeg não encontrado (abra o BruxoSplat e deixe baixar as ferramentas uma vez)');
+
+    const { args: codecArgs, ext } = ffmpegCodecArgs(codec);
+    const outDir = renderOutputDir();
+    const name = `bruxos-vfx-3dgs_${Date.now()}.${ext}`;
+    const outPath = path.join(outDir, name);
+    const ffArgs = ['-y', '-framerate', String(fps), '-i', path.join(seqDir, 'frame_%06d.png'), ...codecArgs, outPath];
+    await runFfmpeg(tools.ffmpeg, ffArgs, seqDir);
+
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ ok: true, url: `/render-output/${encodeURIComponent(name)}`, name }));
+  } catch (e) {
+    res.statusCode = 500;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ ok: false, error: e.message || String(e) }));
+  } finally {
+    fs.rm(work, { recursive: true, force: true }, () => {});
+  }
+}
+
+function handleRenderOutput(req, res, urlObj) {
+  renderCors(res);
+  const name = decodeURIComponent(urlObj.pathname.slice('/render-output/'.length));
+  const file = path.join(renderOutputDir(), name);
+  if (!name || name.includes('..') || !fs.existsSync(file)) { res.statusCode = 404; res.end(); return; }
+  res.setHeader('Content-Type', name.endsWith('.mov') ? 'video/quicktime' : 'video/mp4');
+  res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+  fs.createReadStream(file).pipe(res);
+}
+
 // Servidor local para o viewer (index.html do 3dGS_WebEDIT) carregar o .ply
 function startServer() {
   const server = http.createServer((req, res) => {
+    const urlObj = new URL(req.url, 'http://127.0.0.1');
+    if (req.method === 'OPTIONS' && (urlObj.pathname === '/render' || urlObj.pathname.startsWith('/render-output/'))) {
+      renderCors(res); res.statusCode = 204; res.end(); return;
+    }
+    if (req.method === 'POST' && urlObj.pathname === '/render') { handleRenderRequest(req, res, urlObj); return; }
+    if (req.method === 'GET' && urlObj.pathname.startsWith('/render-output/')) { handleRenderOutput(req, res, urlObj); return; }
     if (req.url.startsWith('/scene.ply') && lastPly) {
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Content-Type', 'application/octet-stream');
@@ -354,6 +462,40 @@ function createWindow() {
   win.loadFile(path.join(__dirname, 'ui', 'index.html'));
 }
 
+/**
+ * macOS: abre o Terminal com o comando de instalação pronto.
+ *
+ * Não executamos o instalador do Homebrew de dentro do app de propósito: ele pede
+ * senha de administrador e confirmação com Enter, e um app aberto pelo Finder não
+ * tem onde receber isso — ficaria travado. Abrindo o Terminal, a pessoa vê o que
+ * vai rodar e digita a senha normalmente.
+ */
+ipcMain.handle('mac-tools-status', () => {
+  if (process.platform !== 'darwin') return { needed: false };
+  const info = macInstallCommand();
+  return info ? { needed: true, ...info } : { needed: false };
+});
+
+ipcMain.handle('mac-tools-install', async () => {
+  if (process.platform !== 'darwin') return { ok: false, error: 'Só faz sentido no macOS.' };
+  const info = macInstallCommand();
+  if (!info) return { ok: true, alreadyDone: true };
+  try {
+    // Escapa aspas e barras para o comando sobreviver ao AppleScript.
+    const cmdEscapado = info.comando.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    const { spawnSync } = require('child_process');
+    const r = spawnSync('osascript', [
+      '-e', `tell application "Terminal" to do script "${cmdEscapado}"`,
+      '-e', 'tell application "Terminal" to activate'
+    ]);
+    if (r.status !== 0) throw new Error((r.stderr || '').toString().trim() || 'osascript falhou');
+    send('status', { stage: 'setup', line: '🖥 Terminal aberto com o comando de instalação. Confirme por lá (pode pedir sua senha) e depois clique em Verificar de novo.' });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message, comando: info.comando };
+  }
+});
+
 ipcMain.handle('get-version', () => app.getVersion());
 ipcMain.handle('get-lang', () => currentLang);
 ipcMain.handle('set-lang', (_e, lang) => {
@@ -576,7 +718,16 @@ ipcMain.handle('train', async (_e, opts) => {
       const grut = await ensure3dgrut(l => send('status', { stage: 'setup', line: l }));
       tools.grutPython = grut.py; tools.grutRepo = grut.repoDir;
     }
-    const trainer = opts.trainingEngine === 'ppisp' ? trainPpisp : opts.trainingEngine === '3dgrut' ? train3dgrut : trainSplat;
+    if (opts.trainingEngine === 'trianglesplat') {
+      if (!hasNvidiaGpu()) throw new Error('Triangle Splatting requer uma GPU NVIDIA com CUDA. Use Brush neste computador.');
+      send('status', { stage: 'setup', line: 'Preparando ambiente isolado do Triangle Splatting…' });
+      const tri = await ensureTriangleSplatting(l => send('status', { stage: 'setup', line: l }));
+      tools.trianglePython = tri.py; tools.triangleRepo = tri.repoDir;
+    }
+    const trainer = opts.trainingEngine === 'ppisp' ? trainPpisp
+      : opts.trainingEngine === '3dgrut' ? train3dgrut
+      : opts.trainingEngine === 'trianglesplat' ? trainTriangleSplat
+      : trainSplat;
     // Quando o app é reiniciado entre alinhamento e treino, reaproveita o sidecar
     // já salvo no projeto para que o resultado final ainda leve a câmera virtual.
     const preparedCamera = preparedDir && path.join(preparedDir, 'camera_path.json');
@@ -593,6 +744,20 @@ ipcMain.handle('train', async (_e, opts) => {
     const ply = typeof trainingResult === 'string' ? trainingResult : trainingResult.ply;
     const outDir = opts.outDir || path.join(app.getPath('documents'), 'BruxoSplat');
     fs.mkdirSync(outDir, { recursive: true });
+
+    // O Triangle Splatting devolve uma MALHA .off, não um .ply de Gaussians. Ela não
+    // passa pelo editor de splats nem pelo WebEDIT, então tem caminho próprio: salva,
+    // avisa o que fazer com o arquivo e encerra sem tentar abrir no visualizador.
+    if (opts.trainingEngine === 'trianglesplat') {
+      const base = path.parse(nextSplatName(outDir)).name;
+      const outMesh = path.join(outDir, base + '.off');
+      fs.copyFileSync(ply, outMesh);
+      send('status', { stage: 'train', line: '✅ Malha salva em: ' + outMesh });
+      send('status', { stage: 'train', line: 'ℹ️ É uma malha de triângulos (.off) — abra em Blender, Unity, Unreal ou MeshLab. Ela não abre no editor de splats.' });
+      send('done', { ply: outMesh, isMesh: true, viewerUrl: null, cameraPath: null });
+      return { ok: true, path: outMesh, isMesh: true };
+    }
+
     const outPly = path.join(outDir, nextSplatName(outDir));
     fs.copyFileSync(ply, outPly);
     let outCameraPath = null;
@@ -679,6 +844,69 @@ function parseCameraIntrinsics(imagesTxt) {
 
 // Formato portátil para reabrir a câmera no viewport ou no WebEDIT. Mantém tanto
 // a pose COLMAP original quanto vetores prontos para um viewer 3D.
+// ── Transformação do trajeto de câmera ───────────────────────────────────────
+// Quatérnios aqui seguem a convenção do COLMAP: [w, x, y, z].
+function qMul(a, b) {
+  return [
+    a[0]*b[0] - a[1]*b[1] - a[2]*b[2] - a[3]*b[3],
+    a[0]*b[1] + a[1]*b[0] + a[2]*b[3] - a[3]*b[2],
+    a[0]*b[2] - a[1]*b[3] + a[2]*b[0] + a[3]*b[1],
+    a[0]*b[3] + a[1]*b[2] - a[2]*b[1] + a[3]*b[0]
+  ];
+}
+const qConj = q => [q[0], -q[1], -q[2], -q[3]];
+function qRot(q, v) {
+  const u = [q[1], q[2], q[3]], w = q[0];
+  const cross = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+  const t = cross(u, v).map(n => 2*n);
+  const c2 = cross(u, t);
+  return [v[0] + w*t[0] + c2[0], v[1] + w*t[1] + c2[1], v[2] + w*t[2] + c2[2]];
+}
+
+/**
+ * Aplica ao trajeto de câmera a mesma transformação que o editor gravou no PLY.
+ *
+ * O `edSave()` transforma cada ponto por `p' = q·(p·s) + t`. Antes, o sidecar da
+ * câmera era apenas COPIADO ao salvar — então, se o usuário movesse, girasse ou
+ * escalasse os Gaussians com o gizmo, o PLY saía transformado e a câmera não,
+ * e os dois não casavam mais em nenhum visualizador externo.
+ *
+ * Convertendo cada campo:
+ *  - centro da câmera:  C' = q·(C·s) + t
+ *  - direção e up:      só rotacionam (translação não afeta vetor; escala uniforme não muda direção)
+ *  - rotação world→camera: R'_wc = R_wc · R_gᵀ  ⇒  q'_wc = q_wc ⊗ conj(q_g)
+ *  - translação world→camera: t'_wc = −R'_wc · C'
+ */
+function transformCameraPath(data, xform) {
+  if (!xform) return data;
+  const s = Number(xform.s) || 1;
+  const q = Array.isArray(xform.q) && xform.q.length === 4 ? xform.q : [1, 0, 0, 0];
+  const t = Array.isArray(xform.t) && xform.t.length === 3 ? xform.t : [0, 0, 0];
+  const isIdentity = s === 1 && q[0] === 1 && !q[1] && !q[2] && !q[3] && !t[0] && !t[1] && !t[2];
+  if (isIdentity) return data;
+
+  const out = { ...data, frames: (data.frames || []).map(f => {
+    const nf = { ...f };
+    if (Array.isArray(f.position)) {
+      const c = qRot(q, f.position.map(n => n * s));
+      nf.position = [c[0] + t[0], c[1] + t[1], c[2] + t[2]];
+    }
+    if (Array.isArray(f.forward)) nf.forward = qRot(q, f.forward);
+    if (Array.isArray(f.up)) nf.up = qRot(q, f.up);
+    if (Array.isArray(f.quaternionWorldToCamera)) {
+      nf.quaternionWorldToCamera = qMul(f.quaternionWorldToCamera, qConj(q));
+      if (nf.position) {
+        const r = qRot(nf.quaternionWorldToCamera, nf.position);
+        nf.translationWorldToCamera = [-r[0], -r[1], -r[2]];
+      }
+    }
+    return nf;
+  }) };
+  out.editorTransform = { scale: s, quaternion: q, translation: t,
+    note: 'Transformação do gizmo já aplicada nestas poses — elas casam com o PLY exportado.' };
+  return out;
+}
+
 function saveCameraPath(workDir, imagesTxt, alignmentMethod, videos) {
   const frames = parseImagesTxt(imagesTxt).map((cam, index) => ({
     index, image: cam.name, cameraId: cam.cameraId,
@@ -689,7 +917,21 @@ function saveCameraPath(workDir, imagesTxt, alignmentMethod, videos) {
   const data = {
     schema: 'bruxos-camera-path/v1', generator: 'BruxoSplat', createdAt: new Date().toISOString(),
     alignmentMethod: alignmentMethod || 'colmap',
-    coordinateSystem: 'COLMAP world coordinates; poses are world-to-camera; viewport/WebEDIT display flips Y.',
+    // ATENÇÃO: a descrição anterior dizia "display flips Y", o que é ERRADO e já
+    // causou um bug real no visualizador (câmera espelhada, apontando pro lado
+    // errado). O flip de exibição é uma ROTAÇÃO de 180° em torno de X, que nega
+    // Y **e** Z. Negar só o Y é um espelhamento: inverte a lateralidade da cena.
+    coordinateSystem: 'COLMAP world coordinates (Y down, Z forward). Poses are world-to-camera. '
+      + 'To display in a Y-up engine (three.js/WebGL), rotate 180° around X — i.e. (x, y, z) -> (x, -y, -z). '
+      + 'Apply the SAME rotation to the point cloud so both stay aligned. Do NOT negate only Y: that mirrors the scene.',
+    conventions: {
+      position: 'Camera center in world space: C = -R^T * t',
+      forward: 'Camera +Z axis in world space (COLMAP cameras look down +Z)',
+      up: 'Camera up in world space (-Y of the camera, since COLMAP Y points down)',
+      quaternionWorldToCamera: '[w, x, y, z], rotates world -> camera',
+      translationWorldToCamera: 'COLMAP t, where p_camera = R * p_world + t',
+      displayTransform: 'rotate X by PI  ->  (x, y, z) becomes (x, -y, -z)'
+    },
     sourceFps: Number(videos && videos[0] && videos[0].fps) || null,
     cameras: parseCameraIntrinsics(imagesTxt), frames
   };
@@ -799,7 +1041,7 @@ ipcMain.handle('convert-seq-splat', async () => {
   } catch (err) { send('error', { message: err.message }); return { error: err.message }; }
 });
 
-ipcMain.handle('save-ply', async (_e, buf, name) => {
+ipcMain.handle('save-ply', async (_e, buf, name, xform) => {
   const outDir = path.dirname(lastPly || path.join(app.getPath('documents'), 'BruxoSplat', 'x'));
   fs.mkdirSync(outDir, { recursive: true });
   const out = path.join(outDir, name || nextSplatName(outDir));
@@ -808,7 +1050,16 @@ ipcMain.handle('save-ply', async (_e, buf, name) => {
   let cameraPath = null;
   if (lastCameraPath && fs.existsSync(lastCameraPath)) {
     const sidecar = path.join(outDir, path.parse(out).name + '.camera.json');
-    if (path.resolve(sidecar) !== path.resolve(lastCameraPath)) fs.copyFileSync(lastCameraPath, sidecar);
+    // O PLY sai com a transformação do gizmo já gravada nos pontos; a câmera
+    // precisa receber a MESMA transformação, senão as duas coisas deixam de casar
+    // em qualquer visualizador externo. Antes isso era um copyFileSync puro.
+    try {
+      const data = JSON.parse(fs.readFileSync(lastCameraPath, 'utf8'));
+      fs.writeFileSync(sidecar, JSON.stringify(transformCameraPath(data, xform), null, 2), 'utf8');
+    } catch (e) {
+      // Se o JSON estiver ilegível, copiar cru ainda é melhor que perder o arquivo.
+      if (path.resolve(sidecar) !== path.resolve(lastCameraPath)) fs.copyFileSync(lastCameraPath, sidecar);
+    }
     lastCameraPath = sidecar;
     cameraPath = `http://127.0.0.1:${serverPort}/camera-path.json`;
   }

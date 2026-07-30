@@ -233,9 +233,47 @@ function run(exe, args, onLine, env, cwd) {
 // Ambiente reutilizável para extensões CUDA do PPISP e do gsplat. O gsplat
 // compila seu backend na primeira renderização, portanto não basta passar
 // essas variáveis apenas durante `uv pip install`.
-function makePpispCudaEnv(py, log) {
-  const cudaBin = findCudaBin(12);
-  if (!cudaBin) throw new Error('CUDA Toolkit 12.x não encontrado. Instale CUDA 12.8 (ou 12.4/12.6) e tente de novo.');
+/*
+ * NOTA — por que NÃO dá para evitar o CUDA Toolkit no Windows (verificado em jul/2026)
+ *
+ * A ideia era instalar o compilador via pip (`nvidia-cuda-nvcc-cu12`) e montar um
+ * CUDA_HOME dentro do venv, dispensando os ~3 GB do Toolkit. Não funciona no Windows.
+ *
+ * Baixei e inspecionei as wheels win_amd64 das versões 12.4.131, 12.6.85, 12.8.93 e
+ * 12.9.86: TODAS trazem apenas `ptxas.exe`, mais headers e o `nvvm`. Nenhuma inclui o
+ * `nvcc.exe`, que é o executável que orquestra a compilação. Sem ele, o PyTorch não
+ * consegue construir extensões CUDA — o `ptxas` sozinho é só uma etapa do processo.
+ *
+ * (No Linux as wheels da NVIDIA incluem o nvcc, mas o app não tem build Linux.)
+ *
+ * Conclusão: para os motores que compilam CUDA (PPISP, Triangle Splatting), o CUDA
+ * Toolkit instalado no sistema é obrigatório. A mensagem de erro em makePpispCudaEnv
+ * explica isso ao usuário e sugere a instalação mínima, que é bem menor que a completa.
+ */
+
+function makePpispCudaEnv(py, log, fallbackCudaBin) {
+  const cudaBin = findCudaBin(12) || fallbackCudaBin || null;
+  if (!cudaBin) throw new Error(
+    'CUDA Toolkit 12.x não encontrado (procurei o nvcc.exe em CUDA_PATH e em ' +
+    '"C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA").\n' +
+    '\n' +
+    'ATENÇÃO: ter driver NVIDIA não basta. O driver roda CUDA, mas NÃO traz o nvcc, ' +
+    'que é o compilador usado para montar as extensões deste motor. São instalações separadas — ' +
+    'por isso o COLMAP consegue usar a GPU e mesmo assim esta etapa falha.\n' +
+    '\n' +
+    'Não adianta instalar via pip: as wheels da NVIDIA para Windows (nvidia-cuda-nvcc-cu12) trazem ' +
+    'apenas o ptxas.exe, sem o nvcc — verificado nas versões 12.4 a 12.9.\n' +
+    '\n' +
+    'O que fazer: instale o CUDA Toolkit 12.4 (é a série do PyTorch usado aqui) em ' +
+    'https://developer.nvidia.com/cuda-12-4-0-download-archive — escolha Windows > x86_64 > exe (local). ' +
+    'A 12.6 ou 12.8 também servem.\n' +
+    '\n' +
+    'DICA para economizar disco: no instalador escolha "Personalizada" e marque apenas ' +
+    'CUDA > Development > Compiler (nvcc) e CUDA > Development > Libraries. Não precisa do driver ' +
+    '(o seu já funciona), nem do Nsight, nem da documentação — isso reduz muito o tamanho.\n' +
+    '\n' +
+    'Depois reinicie o BruxoSplat: o repositório e o ambiente Python já estão baixados, ' +
+    'então ele vai direto para a compilação.');
   const msvcEnv = getVcVarsEnv(log);
   if (!msvcEnv) throw new Error('Visual Studio Build Tools com C++ não encontrado. Instale "Desktop development with C++" e tente de novo.');
   const msvcPath = msvcEnv.Path || msvcEnv.PATH || process.env.Path || process.env.PATH || '';
@@ -578,6 +616,78 @@ async function ensureMast3r(log) {
   return { py, repoDir };
 }
 
+/**
+ * Triangle Splatting (3DV 2026) em ambiente próprio.
+ *
+ * Por que não usa o caminho genérico do installModel: aquele faz `git clone --depth 1`
+ * SEM `--recursive` e trata o repo como pacote pip (`pip install -e`). O Triangle
+ * Splatting não é pacote pip — é um repositório de scripts com DOIS submódulos CUDA
+ * que precisam ser compilados separadamente:
+ *   - submodules/diff-triangle-rasterization  (rasterizador de triângulos)
+ *   - submodules/simple-knn                   (INRIA, gitlab.inria.fr)
+ *
+ * ⚠️ Licença: o núcleo é Apache-2.0 (Univ. de Liège/KAUST/Oxford), mas o `simple-knn`
+ * vem da INRIA sob licença NÃO-COMERCIAL. O conjunto montado herda essa restrição —
+ * mesma situação do MASt3R.
+ *
+ * Saída: malha de triângulos com cor por face (.off no formato COFF), que abre em
+ * Blender, Unity, Unreal e three.js sem shader especial — diferente dos Gaussians.
+ */
+async function ensureTriangleSplatting(log) {
+  if (IS_MAC) throw new Error('Triangle Splatting exige CUDA/NVIDIA e não é suportado no macOS. Use o motor Brush.');
+  ensureGit();
+  // O Visual Studio é o único pré-requisito que NÃO dá pra resolver via pip, então
+  // é checado antes de baixar ~2,5 GB. O compilador CUDA (nvcc), se faltar, é
+  // instalado automaticamente por wheel mais adiante.
+  if (!getVcVarsEnv(log)) {
+    throw new Error('Visual Studio Build Tools com C++ não encontrado.\n' +
+      '\nEste motor compila duas extensões CUDA na primeira instalação, e isso exige o compilador ' +
+      'C++ da Microsoft. Instale o "Build Tools para Visual Studio" e marque a carga de trabalho ' +
+      '"Desenvolvimento para desktop com C++": https://visualstudio.microsoft.com/pt-br/downloads/ ' +
+      '(role até "Ferramentas para Visual Studio").\n' +
+      '\nO compilador CUDA (nvcc) o app instala sozinho — você NÃO precisa do CUDA Toolkit.\n' +
+      '\nEnquanto isso, o motor Brush funciona sem nada disso.');
+  }
+  const repoDir = path.join(MODELS_SRC_DIR(), 'triangle-splatting');
+  if (!fs.existsSync(repoDir)) {
+    fs.mkdirSync(MODELS_SRC_DIR(), { recursive: true });
+    log('Baixando Triangle Splatting e seus submódulos CUDA…');
+    // --recursive é obrigatório: sem os submódulos não há o que compilar.
+    await run('git', ['clone', '--recursive', '--depth', '1',
+      'https://github.com/trianglesplatting/triangle-splatting.git', repoDir], log);
+  }
+  const { uv, py } = await ensureVenv(log, 'pyenv_trianglesplat');
+  const marker = path.join(PY_DIR('pyenv_trianglesplat'), '.installed_trianglesplat');
+  if (!fs.existsSync(marker)) {
+    // O requirements.yaml oficial pede torch 2.4.0 + CUDA 12.6, mas o torch 2.4.0 só
+    // tem wheels até cu124 (cu126 só a partir do torch 2.6). cu124 é a combinação
+    // válida mais próxima e é a mesma já usada pelo PPISP neste app.
+    log('Instalando PyTorch CUDA isolado para Triangle Splatting…');
+    await run(uv, ['pip', 'install', '--python', py, '--index-url', 'https://download.pytorch.org/whl/cu124',
+      'torch==2.4.0', 'torchvision==0.19.0'], log);
+    log('Instalando dependências do Triangle Splatting…');
+    await run(uv, ['pip', 'install', '--python', py, '--index-url', 'https://pypi.org/simple',
+      'tqdm', 'plyfile', 'open3d', 'lpips', 'mediapy', 'opencv-python', 'setuptools', 'wheel'], log);
+
+    // Compilação dos dois módulos CUDA (exige CUDA Toolkit no sistema — ver a
+    // NOTA acima sobre por que o caminho via pip não serve no Windows).
+    const buildEnv = makePpispCudaEnv(py, log);
+    for (const sub of ['diff-triangle-rasterization', 'simple-knn']) {
+      const subDir = path.join(repoDir, 'submodules', sub);
+      if (!fs.existsSync(subDir)) throw new Error(`Submódulo ausente: ${sub}. Apague a pasta ${repoDir} e instale de novo (o clone precisa ser --recursive).`);
+      log(`Compilando ${sub} com CUDA — só na primeira instalação, pode demorar…`);
+      await run(uv, ['pip', 'install', '--python', py, '--no-build-isolation',
+        '--index-url', 'https://pypi.org/simple', subDir], log, buildEnv);
+    }
+    // O repositório não tem setup.py: registramos o checkout como caminho de import
+    // via arquivo .pth, o mesmo mecanismo já usado para o MASt3R.
+    const sitePackages = path.join(PY_DIR('pyenv_trianglesplat'), IS_MAC ? 'lib' : 'Lib', IS_MAC ? 'python3.11' : 'site-packages');
+    try { fs.writeFileSync(path.join(sitePackages, 'bruxos_trianglesplat_repo.pth'), repoDir + '\n'); } catch {}
+    fs.writeFileSync(marker, new Date().toISOString());
+  }
+  return { py, repoDir };
+}
+
 /** Instala 3DGRUT no seu próprio checkout/.venv usando o script UV oficial da NVIDIA. */
 async function ensure3dgrut(log) {
   if (IS_MAC) throw new Error('3DGRUT exige CUDA/NVIDIA e não é suportado no macOS.');
@@ -620,4 +730,4 @@ async function runModel(key, args, log) {
   await run(py, cliArgs, log, env);
 }
 
-module.exports = { installModel, runModel, ensureSplat4dCli, ensureConvertDeps, ensurePpispTrainer, ensureDpvoDirect, ensureMast3r, ensure3dgrut, MODELS, IS_MAC };
+module.exports = { installModel, runModel, ensureSplat4dCli, ensureConvertDeps, ensurePpispTrainer, ensureDpvoDirect, ensureMast3r, ensureTriangleSplatting, ensure3dgrut, MODELS, IS_MAC };

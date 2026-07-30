@@ -573,7 +573,13 @@
     orthoCam.quaternion.copy(camera.quaternion);
     orthoCam.updateProjectionMatrix();
   }
-  const activeCam = () => (useOrtho ? (syncOrtho(), orthoCam) : camera);
+  // DESATIVADO TEMPORARIAMENTE (diagnóstico): num relato de viewport ficando
+  // preto (nem o grid aparece) logo ao abrir o app, esta foi a peça nova mais
+  // suspeita — provável incompatibilidade da câmera ortográfica com o driver
+  // de GPU de quem relatou. O botão "Perspectiva/Ortográfica" continua na tela
+  // e ainda alterna `useOrtho`, mas o render sempre usa a perspectiva até
+  // confirmarmos a causa e reimplementar com segurança.
+  const activeCam = () => camera; // era: (useOrtho ? (syncOrtho(), orthoCam) : camera);
 
   // ── Material custom da nuvem de pontos: 1 shader cobre 5 estilos (via uMode) ──
   //    0=Nuvem  1=Anéis (gaussian ring)  2=Marcadores de centro  3=Depth cinza  4=Depth cor
@@ -638,7 +644,12 @@
     return m;
   }
   // fábrica usada nos dois pontos onde a nuvem é criada
-  window.__makePointsObj = (geometry, worldSize) => new THREE.Points(geometry, makeVizMat(worldSize));
+  // DESATIVADO TEMPORARIAMENTE (diagnóstico, junto com a ortográfica acima):
+  // volta ao material simples de antes da v1.3.0 (sem o shader custom dos
+  // estilos Nuvem/Anéis/Centros/Depth), suspeito nº1 do viewport ficando preto
+  // (nem o grid aparece) logo ao abrir o app num relato recente. O seletor de
+  // estilo continua na tela mas não tem mais efeito enquanto isso.
+  window.__makePointsObj = (geometry, worldSize) => new THREE.Points(geometry, new THREE.PointsMaterial({ size: worldSize || 0.02, vertexColors: true }));
   window.setPointStyle = (s) => {
     pointStyle = s | 0;
     pointVizMats.forEach(m => { m.uniforms.uMode.value = pointStyle; });
@@ -2495,13 +2506,6 @@
   // move controles do viewport para a barra fixa (fora do view)
   $('slotBack').appendChild($('btnBackEd'));
   $('slotView').appendChild($('viewSel'));
-  // vizSel e btnProj nasceram na v1.3 dentro do #viewportWrap e ficaram de fora
-  // desta lista. Todo o resto daqui é movido pra barra fixa justamente porque
-  // #viewportWrap só pode conter o canvas (100% x 100%) e elementos com
-  // position:absolute — qualquer coisa em fluxo normal aqui entra na conta da
-  // altura do container junto com o canvas e quebra o layout do viewport.
-  $('slotView').appendChild($('vizSel'));
-  $('slotView').appendChild($('btnProj'));
   $('slotPlay').appendChild($('playbar'));
   $('slotMode').appendChild($('modeSel'));
   // carrega um arquivo já escolhido pelo diálogo do sistema (window.bruxo.openPly()) — usado tanto pelo

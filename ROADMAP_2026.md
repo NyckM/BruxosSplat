@@ -183,6 +183,63 @@ Cuidados que valem registro:
 
 Padrão continua **Automático** de propósito: mudar o alinhamento junto com os 4 fixes de treino tornaria impossível saber o que causou qualquer diferença.
 
+### ⭐ Triangle Splatting — a alternativa que resolve vários problemas de uma vez
+
+Avaliado em jul/2026. É a direção mais promissora encontrada até aqui, porque **triângulos são malha**:
+o resultado abre em qualquer engine sem shader customizado, ao contrário de Gaussians.
+
+| Repo | O que é | Licença |
+|---|---|---|
+| `trianglesplatting/triangle-splatting` | Triangle Splatting (3DV 2026), 1.2k ⭐ | **Apache-2.0** (Liège/KAUST/Oxford) + `LICENSE_GS.md` para os submódulos derivados do 3DGS |
+| `trianglesplatting2/triangle-splatting2` | **Triangle Splatting+** — triângulos opacos, versão mais recente | não verificada (README não declara) |
+| `GaodeRender/triangle-splatting` | Implementação da Gaode/Amap | não verificada |
+| `leonhardrobin/triangle-splatting2-win10` | Fork do v2 anunciando suporte a Windows 10 | ⚠️ README é **cópia literal** do upstream (ainda manda rodar `bash compile.sh`) — as mudanças de Windows, se existirem, não estão documentadas. Precisa de um diff antes de confiar |
+| `alby13/Triangle-Splatting-Viewer` | Viewer Python/OpenGL para `.off` | ❌ **"proprietary software, all rights reserved"** — não usar |
+| `nmjfry/ts-slam` | Triangle Splatting **SLAM** (ECCV 2026, Imperial) | ❌ não-comercial (MonoGS + INRIA) |
+| `nmjfry/ipu-3dgs` | Renderer para Graphcore IPU (EGSR 2026) | MIT, mas exige hardware IPU de datacenter — **irrelevante** |
+
+**Por que o Triangle Splatting+ (v2) interessa tanto:** ele ataca quatro coisas que já estavam na
+nossa lista, de uma vez só.
+
+1. **Malha de verdade** — o problema do modo Mesh atual (grid de voxels) deixa de existir: a saída
+   já é triângulo. Não precisa de SuGaR nem GOF/SOF.
+2. **Seleção semântica** — traz extração de objetos via **SAM 2** (`segmentation/`), que é
+   exatamente o que queríamos do LangSplat, mas com código pronto.
+3. **Física** — há um projeto Unity com interações físicas e cena caminhável.
+4. **Interoperabilidade** — `create_ply.py` (v2) e `create_off.py` (v1) exportam para engines.
+   Triângulo com cor por face abre em Blender, Unreal, Unity e three.js sem esforço.
+
+O v1 ainda tem `train_game_engine.py`, uma variante do treino que poda triângulos de baixa opacidade
+e força opacidade alta no fim, para a saída ficar compatível com o jeito que game engines renderizam.
+
+**Vantagem decisiva sobre o LGTM/primitivas texturizadas:** lá o bloqueio era formato — nenhum viewer
+conseguiria exibir, e teríamos que escrever suporte no WebEDIT só para ver o resultado. Aqui é o
+oposto: **todo mundo já sabe renderizar triângulo**. O WebEDIT precisaria de um loader, não de um
+rasterizador novo.
+
+**Licenças — verificadas:** o **v1 e o v2 são ambos Apache-2.0** (Univ. de Liège; o v1 também
+KAUST e Oxford). Mas os dois dependem do submódulo **`simple-knn`, que é da INRIA e não-comercial**
+(o v1 documenta isso num `LICENSE_GS.md` separado). Na prática: o núcleo é permissivo, mas o
+conjunto montado herda a restrição não-comercial — **mesma situação do MASt3R**, que já enviamos com
+flag de uso não comercial. Para um app gratuito e open source, é aceitável pelo mesmo critério.
+
+**⚠️ Diferença decisiva de instalação entre v1 e v2** (verificado nos arquivos de dependências):
+
+| | v1 | v2 (Triangle Splatting+) |
+|---|---|---|
+| Dependências | `requirements.yaml` (micromamba) + `simple-knn` | `requirements.txt` com **`pytorch3d` compilado do git**, **`mmcv`**, `cmake`, `pybind11` |
+| Build extra | `compile.sh` / **`compile.bat`** | `compile.sh` + módulo Delaunay via **CMake** |
+| Saída | `.off` (game engine) + `mesh.py` | **`.ply`** via `create_ply.py` |
+| Extras | `train_game_engine.py` | Segmentação por **SAM 2**, projeto **Unity** com física |
+
+O **`pytorch3d` compilado a partir do git é o mesmo obstáculo** que me fez classificar o
+MonoGaussianAvatar/FLAME como frágil no Windows. Somado ao `mmcv` (que também compila CUDA) e ao
+CMake do módulo Delaunay, o v2 tem a instalação mais pesada de tudo que já avaliamos.
+
+O **v1 tem `compile.bat`** — alguém já pensou em Windows — e uma lista de dependências bem menor.
+**Recomendação: começar pelo v1**, validar o fluxo ponta a ponta, e só depois avaliar o v2 pelos
+extras (SAM 2 e física).
+
 ### Primitivas texturizadas ("Less Gaussians, Texture More") — o caminho depois dos fixes
 
 A ideia central do LGTM é aplicável **sem** os pesos bloqueados da Apple: cada primitiva carrega uma **textura RGB + alpha map** em vez de só cor achatada/SH, então uma primitiva texturizada cobre o detalhe que hoje exige dezenas de Gaussians pequenos. É a resposta estrutural pra "pouca definição" e, de quebra, reduz muito o tamanho do arquivo. Isso é **independente do feed-forward** — funciona em otimização por cena, que é o que fazemos.
